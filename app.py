@@ -674,6 +674,10 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
 .review-option {display:block; padding:4px 6px; border-radius:6px; margin:3px 0;}
 .review-option.correct {color:#0f6a4f; font-weight:700;}
 .review-option.wrong-selected {color:#c62828; font-weight:700;}
+.review-summary {background:#fff5f6; border:1px solid #e3d3cc; border-radius:10px; padding:12px 14px; margin-bottom:14px; font-size:14.5px; line-height:1.8;}
+.review-summary .stat-ok {color:#0f6a4f; font-weight:700;}
+.review-summary .stat-bad {color:#c62828; font-weight:700;}
+.review-summary .stat-none {color:#888; font-weight:700;}
 </style>
 </head>
 <body>
@@ -996,6 +1000,24 @@ function buildReviewData(){
     });
 }
 
+function computeStats(){
+    const total = reviewData.length;
+    const correct = reviewData.filter(i=>i.isCorrect).length;
+    const unanswered = reviewData.filter(i=>!i.answered).length;
+    const wrong = total - correct - unanswered;
+    return {total, correct, wrong, unanswered};
+}
+
+function statsHtml(){
+    const s = computeStats();
+    return `<div class="review-summary">
+        <strong>Tổng số câu:</strong> ${s.total}
+        &nbsp;|&nbsp; <span class="stat-ok">✔ Đúng: ${s.correct}</span>
+        &nbsp;|&nbsp; <span class="stat-bad">✘ Sai: ${s.wrong}</span>
+        &nbsp;|&nbsp; <span class="stat-none">– Chưa trả lời: ${s.unanswered}</span>
+    </div>`;
+}
+
 function finishQuiz(mode){
     stopTimer();
     hamburgerMenu.classList.add("hidden");
@@ -1048,7 +1070,7 @@ function reviewToHtml(){
 }
 
 function openResultsModal(){
-    resultsModalBody.innerHTML = reviewToHtml();
+    resultsModalBody.innerHTML = statsHtml() + reviewToHtml();
     resultsModalOverlay.classList.remove("hidden");
 }
 function closeResultsModal(){
@@ -1067,7 +1089,14 @@ function downloadBlob(content, mime, filename){
 }
 
 function exportExcel(){
-    let table = `<table border="1" style="border-collapse:collapse;font-family:Arial;font-size:13px;">
+    const s = computeStats();
+    let table = `<table border="1" style="border-collapse:collapse;font-family:Arial;font-size:13px;margin-bottom:14px;">
+        <tr><td colspan="2" style="background:#fff5f6;font-weight:700;">Tổng số câu</td><td>${s.total}</td></tr>
+        <tr><td colspan="2" style="background:#e8f5e9;font-weight:700;color:#0f6a4f;">Số câu đúng</td><td>${s.correct}</td></tr>
+        <tr><td colspan="2" style="background:#ffebee;font-weight:700;color:#c62828;">Số câu sai</td><td>${s.wrong}</td></tr>
+        <tr><td colspan="2" style="background:#f5f5f5;font-weight:700;color:#888;">Chưa trả lời</td><td>${s.unanswered}</td></tr>
+    </table>
+    <table border="1" style="border-collapse:collapse;font-family:Arial;font-size:13px;">
         <tr style="background:#7a0026;color:#fff;">
             <th>STT</th><th>Câu hỏi</th><th>Đáp án đúng</th><th>Đáp án đã chọn</th><th>Kết quả</th>
         </tr>`;
@@ -1087,7 +1116,9 @@ function exportExcel(){
 }
 
 function exportWord(){
-    const html = `<html><head><meta charset="UTF-8"></head><body><h2>Kết quả bài thi</h2>${reviewToHtml().replace(/class="[^"]*"/g,"")}</body></html>`;
+    const s = computeStats();
+    const summaryText = `<p><strong>Tổng số câu:</strong> ${s.total} &nbsp;|&nbsp; <strong>Đúng:</strong> ${s.correct} &nbsp;|&nbsp; <strong>Sai:</strong> ${s.wrong} &nbsp;|&nbsp; <strong>Chưa trả lời:</strong> ${s.unanswered}</p>`;
+    const html = `<html><head><meta charset="UTF-8"></head><body><h2>Kết quả bài thi</h2>${summaryText}${reviewToHtml().replace(/class="[^"]*"/g,"")}</body></html>`;
     downloadBlob(html, "application/msword", "ket_qua_thi.doc");
 }
 
@@ -1104,8 +1135,12 @@ function printResults(){
         .review-status.ok{color:#0f6a4f;}
         .review-status.bad{color:#c62828;}
         .review-status.none{color:#888;}
+        .review-summary{background:#fff5f6;border:1px solid #e3d3cc;border-radius:10px;padding:12px 14px;margin-bottom:14px;}
+        .review-summary .stat-ok{color:#0f6a4f;font-weight:700;}
+        .review-summary .stat-bad{color:#c62828;font-weight:700;}
+        .review-summary .stat-none{color:#888;font-weight:700;}
     `;
-    printWindow.document.write(`<html><head><meta charset="UTF-8"><title>Kết quả bài thi</title><style>${style}</style></head><body><h2>Kết quả bài thi</h2>${reviewToHtml()}</body></html>`);
+    printWindow.document.write(`<html><head><meta charset="UTF-8"><title>Kết quả bài thi</title><style>${style}</style></head><body><h2>Kết quả bài thi</h2>${statsHtml()}${reviewToHtml()}</body></html>`);
     printWindow.document.close();
     printWindow.focus();
     setTimeout(()=>{ printWindow.print(); }, 300);
@@ -1233,7 +1268,6 @@ a.back-link:hover {text-decoration:underline;}
 <div class="container">
   <h2>Đổi mật khẩu quản trị</h2>
   <form method="post" action="/admin/change_password">
-    <form method="post" action="/admin/decision">
     <div class="form-group">
       <label for="currentPassword">Mật khẩu hiện tại</label>
       <input type="password" id="currentPassword" name="currentPassword" placeholder="Nhập mật khẩu hiện tại" required>
@@ -1323,8 +1357,7 @@ input[type="text"] {padding:6px; min-width:160px;}
   <h2>Quản lý đăng ký</h2>
   <button id="adminHamburgerBtn" class="admin-hamburger-btn" aria-label="Menu">☰</button>
   <div id="adminHamburgerMenu" class="admin-hamburger-menu hidden">
-    <a class="admin-menu-item" 
-    href="/admin/change_password">
+    <a class="admin-menu-item" href="/admin/change_password">🔑 Đổi mật khẩu</a>
     <a class="admin-menu-item danger" href="/admin/logout">🚪 Thoát</a>
   </div>
 </div>
@@ -2220,12 +2253,6 @@ def start_quiz():
         "poolReset": pool_reset,
         "partial": partial
     })
-
-
-
-
-
-
 
 
 
