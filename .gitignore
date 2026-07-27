@@ -1,0 +1,11 @@
+# Chỉ loại các file dữ liệu người dùng SINH RA khi app chạy (chứa mật khẩu đã hash, danh sách tài khoản...)
+# KHÔNG loại các file đề thi .xlsx/.xls/.csv trong data/ - những file này CẦN được đưa lên Git
+# để khi deploy (clone/pull về server) app có sẵn bộ đề ngay, không cần upload tay lại.
+data/devices.json
+data/admin_config.json
+data/used_questions.json
+
+__pycache__/
+*.pyc
+.env
+venv/
