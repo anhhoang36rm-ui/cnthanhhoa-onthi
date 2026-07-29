@@ -592,14 +592,37 @@ body {font-family: Arial, sans-serif; background:#f6f6f6; margin:0; padding:0;}
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
 }
 .header-user-badge {
+  position:relative;
   flex:0 1 auto; min-width:0;
   display:flex; align-items:center; gap:4px;
   color:#ffffff; font-size:12px; font-weight:700;
   max-width:120px;
-  pointer-events:none;
+  cursor:default;
 }
-.header-user-badge .user-icon {font-size:14px; flex-shrink:0; line-height:1;}
-.header-user-badge .user-name {overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;}
+.header-user-badge .user-icon {font-size:14px; flex-shrink:0; line-height:1; transition:transform 150ms ease;}
+.header-user-badge .user-name {
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0;
+  transition:all 150ms ease;
+}
+/* Khi di chuột qua (desktop) hoặc chạm/nhấn giữ (mobile): tên user nổi to lên, đè lên trên,
+   không đẩy layout xung quanh. Rời chuột / nhấc tay ra thì tự thu về như cũ. */
+.header-user-badge:hover .user-name,
+.header-user-badge:active .user-name {
+  position:absolute;
+  right:0; top:50%; transform:translateY(-50%) scale(1.25);
+  transform-origin:right center;
+  background:#2c2c2c;
+  color:#fff;
+  padding:5px 12px;
+  border-radius:8px;
+  white-space:nowrap;
+  max-width:none;
+  overflow:visible;
+  box-shadow:0 6px 16px rgba(0,0,0,.3);
+  z-index:80;
+}
+.header-user-badge:hover .user-icon,
+.header-user-badge:active .user-icon {transform:scale(1.15);}
 .hamburger-btn {
   width:auto; font-size:22px; line-height:1; flex-shrink:0;
   background:#fff; color:#7a0026; border:1px solid #e3d3cc;
@@ -719,6 +742,7 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
 .review-summary .stat-ok {color:#0f6a4f; font-weight:700;}
 .review-summary .stat-bad {color:#c62828; font-weight:700;}
 .review-summary .stat-none {color:#888; font-weight:700;}
+.review-summary .time-row {display:block; margin-top:6px; padding-top:6px; border-top:1px dashed #e3d3cc; font-size:13.5px; color:#5a2d3b;}
 </style>
 </head>
 <body>
@@ -826,6 +850,8 @@ let timerInterval = null;
 let remainingSeconds = 0;
 let answersMap = {};
 let reviewData = [];
+let examStartTime = null;
+let examEndTime = null;
 
 async function showHeaderUserBadge(){
     try{
@@ -931,6 +957,8 @@ async function initQuiz(){
         answeredCount = 0;
         answersMap = {};
         reviewData = [];
+        examStartTime = new Date();
+        examEndTime = null;
 
         setupContainer.classList.add("hidden");
         quizContainerWrapper.classList.remove("hidden");
@@ -1046,18 +1074,39 @@ function computeStats(){
     return {total, correct, wrong, unanswered};
 }
 
+function pad2(n){ return String(n).padStart(2,"0"); }
+function formatDateTime(d){
+    if(!d) return "--";
+    return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())} ${pad2(d.getDate())}/${pad2(d.getMonth()+1)}/${d.getFullYear()}`;
+}
+function formatDuration(ms){
+    if(ms == null || ms < 0) return "--";
+    const totalSec = Math.round(ms/1000);
+    const h = Math.floor(totalSec/3600);
+    const m = Math.floor((totalSec%3600)/60);
+    const s = totalSec%60;
+    let parts = [];
+    if(h>0) parts.push(`${h} giờ`);
+    if(m>0 || h>0) parts.push(`${m} phút`);
+    parts.push(`${s} giây`);
+    return parts.join(" ");
+}
+
 function statsHtml(){
     const s = computeStats();
+    const durationMs = (examStartTime && examEndTime) ? (examEndTime - examStartTime) : null;
     return `<div class="review-summary">
         <strong>Tổng số câu:</strong> ${s.total}
         &nbsp;|&nbsp; <span class="stat-ok">✔ Đúng: ${s.correct}</span>
         &nbsp;|&nbsp; <span class="stat-bad">✘ Sai: ${s.wrong}</span>
         &nbsp;|&nbsp; <span class="stat-none">– Chưa trả lời: ${s.unanswered}</span>
+        <span class="time-row">🕐 Bắt đầu: <strong>${formatDateTime(examStartTime)}</strong> &nbsp;|&nbsp; Kết thúc: <strong>${formatDateTime(examEndTime)}</strong> &nbsp;|&nbsp; Tổng thời gian: <strong>${formatDuration(durationMs)}</strong></span>
     </div>`;
 }
 
 function finishQuiz(mode){
     stopTimer();
+    examEndTime = new Date();
     hamburgerMenu.classList.add("hidden");
     submitEarlyBtn.classList.add("hidden");
     timerDisplay.classList.add("hidden");
@@ -1075,6 +1124,7 @@ function finishQuiz(mode){
     if(unanswered > 0){
         html += `<p>Số câu chưa trả lời: ${unanswered}</p>`;
     }
+    html += `<p style="color:#6b6b6b; font-size:14px;">🕐 ${formatDateTime(examStartTime)} → ${formatDateTime(examEndTime)} (${formatDuration(examEndTime - examStartTime)})</p>`;
     html += `<button id="viewResultsInlineBtn" style="background:#1976d2;">📋 Xem đáp án đã thi</button>`;
     html += `<button id="backToSetupBtn">⟲ Làm bộ đề khác</button>`;
     quizContainer.innerHTML = html;
@@ -1127,11 +1177,15 @@ function downloadBlob(content, mime, filename){
 
 function exportExcel(){
     const s = computeStats();
+    const durationMs = (examStartTime && examEndTime) ? (examEndTime - examStartTime) : null;
     let table = `<table border="1" style="border-collapse:collapse;font-family:Arial;font-size:13px;margin-bottom:14px;">
         <tr><td colspan="2" style="background:#fff5f6;font-weight:700;">Tổng số câu</td><td>${s.total}</td></tr>
         <tr><td colspan="2" style="background:#e8f5e9;font-weight:700;color:#0f6a4f;">Số câu đúng</td><td>${s.correct}</td></tr>
         <tr><td colspan="2" style="background:#ffebee;font-weight:700;color:#c62828;">Số câu sai</td><td>${s.wrong}</td></tr>
         <tr><td colspan="2" style="background:#f5f5f5;font-weight:700;color:#888;">Chưa trả lời</td><td>${s.unanswered}</td></tr>
+        <tr><td colspan="2" style="font-weight:700;">Thời gian bắt đầu</td><td>${formatDateTime(examStartTime)}</td></tr>
+        <tr><td colspan="2" style="font-weight:700;">Thời gian kết thúc</td><td>${formatDateTime(examEndTime)}</td></tr>
+        <tr><td colspan="2" style="font-weight:700;">Tổng thời gian thi</td><td>${formatDuration(durationMs)}</td></tr>
     </table>
     <table border="1" style="border-collapse:collapse;font-family:Arial;font-size:13px;">
         <tr style="background:#7a0026;color:#fff;">
@@ -1154,7 +1208,8 @@ function exportExcel(){
 
 function exportWord(){
     const s = computeStats();
-    const summaryText = `<p><strong>Tổng số câu:</strong> ${s.total} &nbsp;|&nbsp; <strong>Đúng:</strong> ${s.correct} &nbsp;|&nbsp; <strong>Sai:</strong> ${s.wrong} &nbsp;|&nbsp; <strong>Chưa trả lời:</strong> ${s.unanswered}</p>`;
+    const durationMs = (examStartTime && examEndTime) ? (examEndTime - examStartTime) : null;
+    const summaryText = `<p><strong>Tổng số câu:</strong> ${s.total} &nbsp;|&nbsp; <strong>Đúng:</strong> ${s.correct} &nbsp;|&nbsp; <strong>Sai:</strong> ${s.wrong} &nbsp;|&nbsp; <strong>Chưa trả lời:</strong> ${s.unanswered}</p><p><strong>Bắt đầu:</strong> ${formatDateTime(examStartTime)} &nbsp;|&nbsp; <strong>Kết thúc:</strong> ${formatDateTime(examEndTime)} &nbsp;|&nbsp; <strong>Tổng thời gian:</strong> ${formatDuration(durationMs)}</p>`;
     const html = `<html><head><meta charset="UTF-8"></head><body><h2>Kết quả bài thi</h2>${summaryText}${reviewToHtml().replace(/class="[^"]*"/g,"")}</body></html>`;
     downloadBlob(html, "application/msword", "ket_qua_thi.doc");
 }
@@ -1176,6 +1231,7 @@ function printResults(){
         .review-summary .stat-ok{color:#0f6a4f;font-weight:700;}
         .review-summary .stat-bad{color:#c62828;font-weight:700;}
         .review-summary .stat-none{color:#888;font-weight:700;}
+        .review-summary .time-row{display:block;margin-top:6px;padding-top:6px;border-top:1px dashed #e3d3cc;font-size:13.5px;color:#5a2d3b;}
     `;
     printWindow.document.write(`<html><head><meta charset="UTF-8"><title>Kết quả bài thi</title><style>${style}</style></head><body><h2>Kết quả bài thi</h2>${statsHtml()}${reviewToHtml()}</body></html>`);
     printWindow.document.close();
@@ -1188,6 +1244,22 @@ initQuiz();
 </body>
 </html>
 """
+
+@app.route("/quiz")
+def quiz():
+    device_id = request.cookies.get("device_id")
+    email = request.cookies.get("email")
+    df = load_devices()
+    row = df[df["email"].astype(str).str.strip().str.lower() == (email or "")]
+    if (
+        not row.empty
+        and str(row.iloc[0]["status"]).lower() == "approved"
+        and not bool(row.iloc[0]["locked"])
+        and not is_account_expired(row.iloc[0])
+        and str(row.iloc[0]["active_device_id"] or "").strip() == (device_id or "")
+    ):
+        return render_template_string(HTML_QUIZ)
+    return redirect("/")
 
 HTML_CHANGE_PASSWORD = r"""
 <!DOCTYPE html>
@@ -1336,63 +1408,69 @@ ADMIN_HTML = """
 <title>Quản trị đăng ký</title>
 <style>
 * {box-sizing:border-box;}
-body {font-family: Arial, sans-serif; background:#f6f6f6; margin:0; padding:0;}
+body {font-family: Arial, sans-serif; background:#f6f6f6; margin:0; padding:0; font-size:14px;}
 .container {max-width:1100px; margin:16px auto; background:white; padding:16px; border-radius:12px; box-shadow:0 0 10px #aaa;}
-.summary {display:flex; gap:12px; flex-wrap:wrap; margin:12px 0 18px;}
-.summary div {background:#f5f5f5; padding:10px 12px; border-radius:8px; min-width:130px; flex:1 1 130px;}
+h2 {margin-top:0; font-size:18px;}
+.summary {display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 14px;}
+.summary div {background:#f5f5f5; padding:8px 10px; border-radius:8px; min-width:100px; flex:1 1 100px; font-size:12.5px; line-height:1.5;}
+.summary div strong {font-size:13px;}
 .table-scroll {width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch;}
-table {width:100%; min-width:720px; border-collapse:collapse; margin-top:15px;}
-th, td {padding:8px; border:1px solid #ddd; text-align:left; font-size:14px;}
-button {padding:8px 10px; border:none; border-radius:6px; cursor:pointer; color:white; font-size:14px;}
+table {width:100%; min-width:720px; border-collapse:collapse; margin-top:12px;}
+th, td {padding:6px 7px; border:1px solid #ddd; text-align:left; font-size:12.5px; vertical-align:top;}
+th {font-size:12.5px; white-space:nowrap;}
+button {padding:6px 9px; border:none; border-radius:6px; cursor:pointer; color:white; font-size:12.5px; white-space:nowrap;}
 .approve {background:#2e7d32;}
 .reject {background:#c62828;}
-input[type="text"] {padding:6px; min-width:160px;}
-.bulk-bar {margin:14px 0; padding:10px; background:#f8f8f8; border-radius:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
-.excel-box {margin:14px 0; padding:14px; background:#eef6fc; border:1px solid #b6d4fe; border-radius:10px; display:flex; gap:12px; flex-wrap:wrap; align-items:center; justify-content:space-between;}
-.excel-box form {display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
-.excel-box input[type="file"] {font-size:14px;}
-.excel-btn-download {background:#1976d2; color:white; text-decoration:none; padding:9px 12px; border-radius:6px; font-weight:700; font-size:14px; display:inline-block;}
+input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
+.bulk-bar {margin:12px 0; padding:8px; background:#f8f8f8; border-radius:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;}
+.excel-box {margin:12px 0; padding:12px; background:#eef6fc; border:1px solid #b6d4fe; border-radius:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:space-between; font-size:12.5px;}
+.excel-box form {display:flex; gap:6px; align-items:center; flex-wrap:wrap;}
+.excel-box input[type="file"] {font-size:12.5px; max-width:190px;}
+.excel-btn-download {background:#1976d2; color:white; text-decoration:none; padding:6px 9px; border-radius:6px; font-weight:700; font-size:12.5px; display:inline-block; white-space:nowrap;}
 .excel-btn-download:hover {background:#115293;}
-.search-bar {margin:14px 0 4px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;}
-.search-bar input[type="search"] {flex:1; min-width:220px; padding:10px 12px; border:1px solid #ccc; border-radius:8px; font-size:15px;}
+.search-bar {margin:12px 0 4px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
+.search-bar input[type="search"] {flex:1; min-width:200px; padding:7px 9px; border:1px solid #ccc; border-radius:8px; font-size:13px;}
 .search-bar input[type="search"]:focus {outline:none; border-color:#7a0026; box-shadow:0 0 0 3px rgba(122,0,38,.12);}
-.search-count {font-size:13px; color:#666; white-space:nowrap;}
-.no-results-row td {text-align:center; color:#888; padding:16px; font-style:italic;}
-.expiry-status {font-weight:700; white-space:nowrap; display:block; margin-bottom:6px;}
+.search-count {font-size:12px; color:#666; white-space:nowrap;}
+.no-results-row td {text-align:center; color:#888; padding:14px; font-style:italic;}
+.expiry-status {font-weight:700; white-space:nowrap; display:block; margin-bottom:4px; font-size:12px;}
 .expiry-status.ok {color:#2e7d32;}
 .expiry-status.bad {color:#c62828;}
 .expiry-status.none {color:#555;}
-.expiry-form {display:flex; gap:4px; align-items:center; flex-wrap:wrap;}
-.expiry-form input[type="number"] {width:56px; padding:5px; min-width:0;}
-.expiry-form select {padding:5px; font-size:13px;}
-.expiry-form button {padding:5px 8px; font-size:12px;}
+.expiry-form {display:flex; gap:3px; align-items:center; flex-wrap:wrap;}
+.expiry-form input[type="number"] {width:44px; padding:4px; min-width:0; font-size:12px;}
+.expiry-form select {padding:4px; font-size:11.5px;}
+.expiry-form button {padding:4px 6px; font-size:11px;}
 .admin-topbar {display:flex; align-items:center; justify-content:space-between; gap:10px; position:relative;}
 .admin-topbar h2 {margin:0;}
 .admin-hamburger-btn {
-  width:auto; font-size:20px; line-height:1; flex-shrink:0;
+  width:auto; font-size:18px; line-height:1; flex-shrink:0;
   background:#fff; color:#7a0026; border:1px solid #e3d3cc;
-  border-radius:9px; padding:7px 11px; margin:0;
+  border-radius:9px; padding:6px 10px; margin:0;
   cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.08);
 }
 .admin-hamburger-btn:hover, .admin-hamburger-btn:active {background:#fff5f6;}
 .admin-hamburger-menu {
-  position:absolute; top:42px; right:0; min-width:210px;
+  position:absolute; top:40px; right:0; min-width:190px;
   background:#fff; border-radius:12px; box-shadow:0 10px 28px rgba(0,0,0,.18);
   padding:6px; z-index:60;
 }
 .admin-menu-item {
   display:block; width:100%; text-align:left; text-decoration:none;
   background:none; border:none; border-radius:8px;
-  padding:9px 10px; margin:1px 0; font-size:14.5px; color:#333; cursor:pointer;
+  padding:8px 9px; margin:1px 0; font-size:13px; color:#333; cursor:pointer;
 }
 .admin-menu-item:hover {background:#f5eff0;}
 .admin-menu-item.danger {color:#c62828; font-weight:700;}
 .hidden {display:none !important;}
-.alert-msg {padding:10px 14px; border-radius:8px; font-weight:700; margin:10px 0;}
+.alert-msg {padding:8px 12px; border-radius:8px; font-weight:700; margin:8px 0; font-size:13px;}
 .alert-success {background:#e8f5e9; color:#2e7d32; border:1px solid #a5d6a7;}
 .alert-error {background:#ffebee; color:#c62828; border:1px solid #ef9a9a;}
+.action-cell {display:inline-flex; gap:4px; align-items:center; flex-wrap:nowrap; white-space:nowrap;}
+.action-cell button {min-width:0;}
+.pw-cell {display:flex; align-items:center; gap:4px; flex-wrap:nowrap; white-space:nowrap;}
 @media (max-width:480px){
-  .container {margin:8px; padding:12px; border-radius:10px;}
+  .container {margin:8px; padding:10px; border-radius:10px;}
 }
 </style>
 </head>
@@ -1417,16 +1495,15 @@ input[type="text"] {padding:6px; min-width:160px;}
 <div><strong>Tổng</strong><br>{{ stats.total }}</div>
 </div>
 
-<!-- Khối thêm User từ Excel -->
 <div class="excel-box">
   <div>
     <strong>📊 Thêm User từ Excel:</strong>
-    <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải file Excel mẫu</a>
+    <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu</a>
   </div>
   <form method="post" action="/admin/upload_users" enctype="multipart/form-data">
     <input type="hidden" name="pwd" value="{{ pwd }}">
     <input type="file" name="excel_file" accept=".xlsx, .xls" required>
-    <button type="submit" style="background:#2e7d32; padding:9px 12px;" onclick="return confirm('Tải lên và duyệt tự động các tài khoản trong file Excel này?')">📤 Upload Excel</button>
+    <button type="submit" style="background:#2e7d32;" onclick="return confirm('Tải lên và duyệt tự động các tài khoản trong file Excel này?')">📤 Upload</button>
   </form>
 </div>
 
@@ -1448,12 +1525,12 @@ input[type="text"] {padding:6px; min-width:160px;}
 <td><input type="checkbox" class="rowCheck" name="selected_emails" value="{{ row.email }}"></td>
 <td>{{ row.email }}</td>
 <td>{{ row.status }}</td>
-<td style="min-width:200px;">
+<td style="min-width:170px;">
   {% if row.expires_at %}
     {% if is_expired(row.expires_at) %}
-      <span class="expiry-status bad">⛔ Hết hạn: {{ row.expires_at[:10] }}</span>
+      <span class="expiry-status bad">⛔ {{ row.expires_at[:10] }}</span>
     {% else %}
-      <span class="expiry-status ok">✅ Đến: {{ row.expires_at[:10] }}</span>
+      <span class="expiry-status ok">✅ {{ row.expires_at[:10] }}</span>
     {% endif %}
   {% else %}
     <span class="expiry-status none">♾ Không giới hạn</span>
@@ -1466,27 +1543,29 @@ input[type="text"] {padding:6px; min-width:160px;}
       <option value="day">Ngày</option>
       <option value="month">Tháng</option>
     </select>
-    <button type="submit" name="expiry_action" value="set" style="background:#1976d2;" onclick="return confirm('Đặt hạn sử dụng mới cho tài khoản này?')">Đặt hạn</button>
-    <button type="submit" name="expiry_action" value="clear" style="background:#616161;" onclick="return confirm('Bỏ giới hạn (cho phép dùng không thời hạn)?')">Không hạn</button>
+    <button type="submit" name="expiry_action" value="set" style="background:#1976d2;" onclick="return confirm('Đặt hạn sử dụng mới cho tài khoản này?')">Đặt</button>
+    <button type="submit" name="expiry_action" value="clear" style="background:#616161;" onclick="return confirm('Bỏ giới hạn (cho phép dùng không thời hạn)?')">Bỏ hạn</button>
   </form>
 </td>
-<td style="white-space:nowrap;">
+<td>
   {% if row.raw_password %}
+  <div class="pw-cell">
     <span id="pw-{{ loop.index }}">{{ row.raw_password }}</span>
-    <button type="button" onclick="copyPassword({{ loop.index }})" style="background:#1976d2;">Sao chép</button>
+    <button type="button" onclick="copyPassword({{ loop.index }})" style="background:#1976d2;">Copy</button>
+  </div>
   {% else %}
     —
   {% endif %}
 </td>
-<td>{{ row.created_at or '' }}</td>
+<td style="white-space:nowrap;">{{ row.created_at or '' }}</td>
 <td>
-<form method="post" action="/admin/decision" style="display:inline-flex; gap:6px; align-items:center; flex-wrap:wrap;">
+<form method="post" action="/admin/decision" class="action-cell">
 <input type="hidden" name="pwd" value="{{ pwd }}">
 <input type="hidden" name="email" value="{{ row.email }}">
 {% if row.status|lower != 'approved' %}
 <button class="approve" type="submit" name="action" value="approve" onclick="return confirm('Bạn có chắc muốn duyệt tài khoản này?')">Duyệt</button>
 {% else %}
-<span style="color:#2e7d32; font-weight:700;">Đã duyệt</span>
+<span style="color:#2e7d32; font-weight:700; font-size:12px;">Đã duyệt</span>
 {% endif %}
 <button class="reject" type="submit" name="action" value="reject" onclick="return confirm('Bạn có chắc muốn từ chối tài khoản này?')">Từ chối</button>
 <button type="submit" formaction="/admin/delete" formmethod="post" style="background:#616161;" onclick="return confirm('Bạn có chắc muốn xóa tài khoản này?')">Xóa</button>
@@ -1601,6 +1680,30 @@ function copyPassword(index){
 </body>
 </html>
 """
+
+@app.route("/admin")
+def admin():
+  if not is_admin_request():
+    return render_template_string(ADMIN_LOGIN_HTML, error=request.args.get('error',''))
+
+  df = load_devices()
+  rows = df.to_dict(orient="records")
+  stats = {
+        "pending": int((df["status"].astype(str).str.lower() == "pending").sum()),
+        "approved": int((df["status"].astype(str).str.lower() == "approved").sum()),
+        "rejected": int((df["status"].astype(str).str.lower() == "rejected").sum()),
+        "total": len(df)
+    }
+  return render_template_string(
+    ADMIN_HTML,
+    rows=rows,
+    stats=stats,
+    is_expired=is_expired_str,
+    msg=request.args.get("msg", ""),
+    error=request.args.get("error", ""),
+    pwd=ADMIN_PASSWORD
+)
+
 
 def is_admin_request():
   return request.cookies.get("admin_auth") == "1" or request.args.get("pwd", "") == ADMIN_PASSWORD
@@ -1728,6 +1831,13 @@ def add_months(source_date, months):
     return source_date.replace(year=year, month=month, day=day)
 
 
+def now_vn():
+    """Trả về thời gian hiện tại theo giờ Việt Nam (UTC+7).
+    Dùng thay cho datetime.now() để không bị lệch giờ khi server host ở múi giờ khác (thường là UTC)."""
+    from datetime import timezone
+    return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=7)
+
+
 def is_expired_str(expires_at):
     expires_at = str(expires_at or "").strip()
     if not expires_at:
@@ -1736,7 +1846,7 @@ def is_expired_str(expires_at):
         exp_dt = datetime.strptime(expires_at, "%Y-%m-%d %H:%M:%S")
     except Exception:
         return False
-    return datetime.now() > exp_dt
+    return now_vn() > exp_dt
 
 
 def is_account_expired(row):
@@ -1835,7 +1945,7 @@ def register():
             save_devices(df)
             return jsonify({"success": True, "msg": "Yêu cầu đăng ký đã được gửi lại và đang chờ xét duyệt."})
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
     new_row = pd.DataFrame([{"email": email, "device_id": str(uuid.uuid4()), "active_device_id": "", "status": "pending", "activation_code": "", "password": "", "raw_password": "", "locked": False, "created_at": now, "updated_at": now, "note": "Đăng ký mới"}])
     df = pd.concat([df, new_row], ignore_index=True)
     save_devices(df)
@@ -1907,7 +2017,7 @@ def login():
             "otherDevice": True
         })
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
     df.at[row.index[0], "device_id"] = current_device_id
     df.at[row.index[0], "active_device_id"] = current_device_id
     df.at[row.index[0], "updated_at"] = now
@@ -1927,22 +2037,6 @@ def api_whoami():
     return jsonify({"email": email})
 
 
-@app.route("/quiz")
-def quiz():
-    device_id = request.cookies.get("device_id")
-    email = request.cookies.get("email")
-    df = load_devices()
-    row = df[df["email"].astype(str).str.strip().str.lower() == (email or "")]
-    if (
-        not row.empty
-        and str(row.iloc[0]["status"]).lower() == "approved"
-        and not bool(row.iloc[0]["locked"])
-        and not is_account_expired(row.iloc[0])
-        and str(row.iloc[0]["active_device_id"] or "").strip() == (device_id or "")
-    ):
-        return render_template_string(HTML_QUIZ)
-    return redirect("/")
-
 @app.route("/logout")
 def logout():
     device_id = request.cookies.get("device_id")
@@ -1952,7 +2046,7 @@ def logout():
         row = df[df["email"].astype(str).str.strip().str.lower() == (email or "")]
         if not row.empty and str(row.iloc[0]["active_device_id"] or "").strip() == device_id:
             df.at[row.index[0], "active_device_id"] = ""
-            df.at[row.index[0], "updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            df.at[row.index[0], "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
             save_devices(df)
     if email:
         SESSION_USED_QUESTIONS.pop(email.strip().lower(), None)
@@ -2004,7 +2098,7 @@ def change_password_action():
         return jsonify({"success": False, "msg": "Mật khẩu hiện tại không đúng."})
     df.at[idx, "password"] = hash_password(new_password)
     df.at[idx, "raw_password"] = new_password
-    df.at[idx, "updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    df.at[idx, "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
     save_devices(df)
     return jsonify({"success": True, "msg": "Đổi mật khẩu thành công."})
 
@@ -2023,36 +2117,12 @@ def clear_session():
     if not active_device_id:
         return jsonify({"success": False, "msg": "Không có thiết bị cũ đang đăng nhập."})
     df.at[idx, "active_device_id"] = ""
-    df.at[idx, "updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    df.at[idx, "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
     save_devices(df)
     resp = make_response(jsonify({"success": True, "msg": "Phiên đăng nhập cũ đã được xóa. Bạn có thể đăng nhập lại."}))
     resp.delete_cookie("device_id")
     resp.delete_cookie("email")
     return resp
-
-
-@app.route("/admin")
-def admin():
-  if not is_admin_request():
-    return render_template_string(ADMIN_LOGIN_HTML, error=request.args.get('error',''))
-
-  df = load_devices()
-  rows = df.to_dict(orient="records")
-  stats = {
-        "pending": int((df["status"].astype(str).str.lower() == "pending").sum()),
-        "approved": int((df["status"].astype(str).str.lower() == "approved").sum()),
-        "rejected": int((df["status"].astype(str).str.lower() == "rejected").sum()),
-        "total": len(df)
-    }
-  return render_template_string(
-    ADMIN_HTML,
-    rows=rows,
-    stats=stats,
-    is_expired=is_expired_str,
-    msg=request.args.get("msg", ""),
-    error=request.args.get("error", ""),
-    pwd=ADMIN_PASSWORD
-)
 
 
 @app.route("/admin/download_user_template")
@@ -2101,7 +2171,7 @@ def admin_upload_users():
         return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote(f"Không thể đọc file Excel: {e}"))
     
     df = load_devices()
-    now = datetime.now()
+    now = now_vn()
     now_str = now.strftime("%Y-%m-%d %H:%M:%S")
     
     added_count = 0
@@ -2195,7 +2265,7 @@ def admin_decision():
   match = df[df["email"].astype(str).str.strip().str.lower() == email]
   if not match.empty:
     idx = match.index[0]
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
     if action == "approve":
       df.at[idx, "status"] = "approved"
       df.at[idx, "activation_code"] = generate_code()
@@ -2242,7 +2312,7 @@ def admin_bulk():
     return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
   df = load_devices()
-  now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
   for email in selected:
     email = str(email).strip().lower()
     match = df[df["email"].astype(str).str.strip().str.lower() == email]
@@ -2311,7 +2381,7 @@ def admin_set_expiry():
   match = df[df["email"].astype(str).str.strip().str.lower() == email]
   if not match.empty:
     idx = match.index[0]
-    now = datetime.now()
+    now = now_vn()
     if action == "clear":
       df.at[idx, "expires_at"] = ""
     elif action == "set":
@@ -2336,13 +2406,18 @@ def parse_quiz_rows(df):
     for idx, row in df.iterrows():
         try:
             question = str(row[1]).strip()
-            answers = [str(row[i]).strip() if pd.notna(row[i]) else "" for i in range(2, 6)]
-            if question == "" or all(a == "" for a in answers):
+            raw_answers = [str(row[i]).strip() if pd.notna(row[i]) else "" for i in range(2, 6)]
+            # Chỉ giữ các đáp án CÓ NỘI DUNG - tránh sinh ra ô tích chọn trống (không chữ)
+            # khi câu hỏi thực tế chỉ có 2 hoặc 3 đáp án thay vì đủ 4.
+            answers = [a for a in raw_answers if a != ""]
+            if question == "" or len(answers) < 2:
                 continue
             correct_index = int(str(row[6]).strip()) - 1
             if correct_index < 0 or correct_index > 3:
                 continue
-            correct_text = answers[correct_index]
+            if correct_index >= len(raw_answers) or raw_answers[correct_index] == "":
+                continue
+            correct_text = raw_answers[correct_index]
             items.append({"id": int(idx), "question": question, "answers": answers, "correctAnswer": correct_text})
         except Exception:
             continue
@@ -2435,12 +2510,15 @@ def start_quiz():
         quiz.append({"question": it["question"], "options": answers, "correctAnswer": it["correctAnswer"]})
     random.shuffle(quiz)
 
+    now_str = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+
     return jsonify({
         "questions": quiz,
         "total": total,
         "remaining": remaining_after,
         "poolReset": pool_reset,
-        "partial": partial
+        "partial": partial,
+        "startedAt": now_str
     })
 
 
