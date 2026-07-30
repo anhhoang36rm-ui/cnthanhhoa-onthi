@@ -1399,6 +1399,58 @@ a.back-link:hover {text-decoration:underline;}
 </html>
 """
 
+UPLOAD_RESULT_HTML = """
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kết quả nhập Excel</title>
+<style>
+* {box-sizing:border-box;}
+body {font-family: Arial, sans-serif; background:#f6f6f6; margin:0; padding:0; font-size:14px;}
+.container {max-width:900px; margin:16px auto; background:white; padding:18px; border-radius:12px; box-shadow:0 0 10px #aaa;}
+h2 {margin-top:0; color:#7a0026;}
+.summary-box {display:flex; gap:10px; flex-wrap:wrap; margin:12px 0 16px;}
+.summary-box div {padding:10px 14px; border-radius:8px; font-weight:700; font-size:14px;}
+.summary-ok {background:#e8f5e9; color:#2e7d32;}
+.summary-bad {background:#ffebee; color:#c62828;}
+table {width:100%; border-collapse:collapse; margin-top:10px;}
+th, td {padding:8px; border:1px solid #ddd; text-align:left; font-size:13px; vertical-align:top;}
+th {background:#fafafa; text-align:center;}
+.row-num {font-weight:700; color:#7a0026; white-space:nowrap;}
+.reason-cell {color:#c62828;}
+.back-link {display:inline-block; margin-top:16px; padding:10px 16px; background:#7a0026; color:white; text-decoration:none; border-radius:8px; font-weight:700;}
+.back-link:hover {background:#5c001f;}
+@media (max-width:480px){
+  .container {margin:8px; padding:12px;}
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <h2>📋 Kết quả nhập tài khoản từ Excel</h2>
+  <div class="summary-box">
+    <div class="summary-ok">✅ Thành công: {{ added_count }} tài khoản</div>
+    <div class="summary-bad">⚠️ Lỗi / cần chú ý: {{ error_count }} dòng</div>
+  </div>
+  <p>Danh sách chi tiết các dòng cần kiểm tra lại (số dòng tính theo file Excel gốc, dòng 1 là tiêu đề):</p>
+  <table>
+    <tr><th style="width:70px;">Dòng</th><th style="width:220px;">Email đọc được</th><th>Lý do</th></tr>
+    {% for err in row_errors %}
+    <tr>
+      <td class="row-num">{{ err.row }}</td>
+      <td>{{ err.email }}</td>
+      <td class="reason-cell">{{ err.reason }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <a class="back-link" href="/admin?pwd={{ pwd }}">← Quay lại trang quản trị</a>
+</div>
+</body>
+</html>
+"""
+
 ADMIN_HTML = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -1417,7 +1469,7 @@ h2 {margin-top:0; font-size:18px;}
 .table-scroll {width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch;}
 table {width:100%; min-width:720px; border-collapse:collapse; margin-top:12px;}
 th, td {padding:6px 7px; border:1px solid #ddd; text-align:left; font-size:12.5px; vertical-align:top;}
-th {font-size:12.5px; white-space:nowrap;}
+th {font-size:12.5px; white-space:nowrap; text-align:center; background:#faf5f5;}
 button {padding:6px 9px; border:none; border-radius:6px; cursor:pointer; color:white; font-size:12.5px; white-space:nowrap;}
 .approve {background:#2e7d32;}
 .reject {background:#c62828;}
@@ -1432,7 +1484,28 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 .search-bar input[type="search"] {flex:1; min-width:200px; padding:7px 9px; border:1px solid #ccc; border-radius:8px; font-size:13px;}
 .search-bar input[type="search"]:focus {outline:none; border-color:#7a0026; box-shadow:0 0 0 3px rgba(122,0,38,.12);}
 .search-count {font-size:12px; color:#666; white-space:nowrap;}
+.pagination-bar {display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:8px 0 4px; font-size:12.5px; color:#444;}
+.pagination-bar select {padding:4px 6px; font-size:12.5px; border-radius:6px;}
+.pagination-controls {display:flex; align-items:center; gap:8px;}
+.pagination-controls button {padding:5px 10px; font-size:12.5px; background:#7a0026;}
+.pagination-controls button:disabled {background:#ccc; cursor:not-allowed;}
+#pageInfo {white-space:nowrap; font-weight:700;}
 .no-results-row td {text-align:center; color:#888; padding:14px; font-style:italic;}
+.status-cell {display:inline-flex; align-items:center; gap:5px; white-space:nowrap; font-size:12px; font-weight:700;}
+.status-dot {width:8px; height:8px; min-width:8px; border-radius:50%; flex-shrink:0;}
+.status-cell.approved {color:#2e7d32;}
+.status-cell.pending {color:#c77700;}
+.status-cell.rejected {color:#c62828;}
+.status-dot.approved {background:#2e7d32;}
+.status-dot.pending {background:#f57f17;}
+.status-dot.rejected {background:#c62828;}
+.lock-flag {margin-left:3px; cursor:default;}
+/* Tô màu nhẹ cả dòng theo trạng thái - giúp nhận biết ngay cả khi lướt nhanh, không cần đọc chữ */
+#adminTable tr.row-pending {background:#fffbea;}
+#adminTable tr.row-rejected {background:#fef0f0;}
+#adminTable tr.row-approved {background:#ffffff;}
+#adminTable tr.row-locked {background:#f3f1f1 !important;}
+#adminTable tr[class*="row-"]:hover {filter:brightness(0.97);}
 .expiry-status {font-weight:700; white-space:nowrap; display:block; margin-bottom:4px; font-size:12px;}
 .expiry-status.ok {color:#2e7d32;}
 .expiry-status.bad {color:#c62828;}
@@ -1466,8 +1539,22 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 .alert-msg {padding:8px 12px; border-radius:8px; font-weight:700; margin:8px 0; font-size:13px;}
 .alert-success {background:#e8f5e9; color:#2e7d32; border:1px solid #a5d6a7;}
 .alert-error {background:#ffebee; color:#c62828; border:1px solid #ef9a9a;}
-.action-cell {display:inline-flex; gap:4px; align-items:center; flex-wrap:nowrap; white-space:nowrap;}
-.action-cell button {min-width:0;}
+.row-action-btn {background:#455a64; padding:6px 9px; font-size:12px; white-space:nowrap;}
+.row-action-btn:hover {background:#37474f;}
+.row-action-menu {
+  position:fixed; min-width:170px;
+  background:#fff; border-radius:10px; box-shadow:0 10px 28px rgba(0,0,0,.22);
+  padding:6px; z-index:100;
+}
+.row-menu-item {
+  display:block; width:100%; text-align:left; color:#333;
+  background:none; border:none; border-radius:8px;
+  padding:8px 9px; margin:1px 0; font-size:13px; cursor:pointer;
+}
+.row-menu-item:hover {background:#f5eff0;}
+.row-menu-item.approve {color:#2e7d32; font-weight:700;}
+.row-menu-item.reject {color:#c62828;}
+.row-menu-item.danger {color:#c62828; font-weight:700;}
 .pw-cell {display:flex; align-items:center; gap:4px; flex-wrap:nowrap; white-space:nowrap;}
 @media (max-width:480px){
   .container {margin:8px; padding:10px; border-radius:10px;}
@@ -1497,8 +1584,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 
 <div class="excel-box">
   <div>
-    <strong>📊 Thêm User từ Excel:</strong>
-    <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu</a>
+   <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu thêm User từ Excel</a>
   </div>
   <form method="post" action="/admin/upload_users" enctype="multipart/form-data">
     <input type="hidden" name="pwd" value="{{ pwd }}">
@@ -1512,25 +1598,54 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <div id="bulkSelectedEmails"></div>
 <button class="approve" type="button" onclick="submitBulkAction('approve')">Duyệt hàng loạt</button>
 <button class="reject" type="button" onclick="submitBulkAction('reject')">Từ chối hàng loạt</button>
+<button type="button" style="background:#616161;" onclick="submitBulkAction('delete')">🗑️ Xóa hàng loạt</button>
 </form>
 <div class="search-bar">
-<input type="search" id="adminSearchInput" placeholder="🔍 Tìm theo email..." oninput="filterAdminTable()" autocomplete="off">
+<input type="search" id="adminSearchInput" placeholder="🔍 Tìm theo email..." oninput="onSearchInput()" autocomplete="off">
 <span id="searchResultCount" class="search-count"></span>
+</div>
+<div class="pagination-bar">
+  <div>
+    Hiển thị:
+    <select class="js-page-size" onchange="onPageSizeChange(this)">
+      <option value="100" selected>100</option>
+      <option value="200">200</option>
+      <option value="300">300</option>
+    </select>
+    dòng / trang
+  </div>
+  <div class="pagination-controls">
+    <button type="button" class="js-prev-btn" onclick="goPrevPage()">← Trước</button>
+    <span class="js-page-info">Trang 1/1</span>
+    <button type="button" class="js-next-btn" onclick="goNextPage()">Sau →</button>
+  </div>
 </div>
 <div class="table-scroll">
 <table id="adminTable">
-<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Hành động</th></tr>
+<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Tác vụ</th></tr>
 {% for row in rows %}
-<tr data-email="{{ row.email }}">
+<tr data-email="{{ row.email }}" class="row-{{ row.status|lower }}{{ ' row-locked' if row.locked else '' }}">
 <td><input type="checkbox" class="rowCheck" name="selected_emails" value="{{ row.email }}"></td>
 <td>{{ row.email }}</td>
-<td>{{ row.status }}</td>
+<td>
+  {% set st = row.status|lower %}
+  {% if st == 'approved' %}
+    <span class="status-cell approved" title="Đã duyệt"><span class="status-dot approved"></span>Duyệt</span>
+  {% elif st == 'pending' %}
+    <span class="status-cell pending" title="Chờ duyệt"><span class="status-dot pending"></span>Chờ</span>
+  {% elif st == 'rejected' %}
+    <span class="status-cell rejected" title="Từ chối"><span class="status-dot rejected"></span>Từ chối</span>
+  {% else %}
+    <span class="status-cell" title="{{ row.status }}"><span class="status-dot"></span>{{ row.status }}</span>
+  {% endif %}
+  {% if row.locked %}<span class="lock-flag" title="Tài khoản đã bị khóa">🔒</span>{% endif %}
+</td>
 <td style="min-width:170px;">
   {% if row.expires_at %}
     {% if is_expired(row.expires_at) %}
-      <span class="expiry-status bad">⛔ {{ row.expires_at[:10] }}</span>
+      <span class="expiry-status bad">⛔ {{ format_date(row.expires_at, false) }}</span>
     {% else %}
-      <span class="expiry-status ok">✅ {{ row.expires_at[:10] }}</span>
+      <span class="expiry-status ok">✅ {{ format_date(row.expires_at, false) }}</span>
     {% endif %}
   {% else %}
     <span class="expiry-status none">♾ Không giới hạn</span>
@@ -1557,25 +1672,42 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
     —
   {% endif %}
 </td>
-<td style="white-space:nowrap;">{{ row.created_at or '' }}</td>
+<td style="white-space:nowrap;">{{ format_date(row.created_at) }}</td>
 <td>
-<form method="post" action="/admin/decision" class="action-cell">
-<input type="hidden" name="pwd" value="{{ pwd }}">
-<input type="hidden" name="email" value="{{ row.email }}">
-{% if row.status|lower != 'approved' %}
-<button class="approve" type="submit" name="action" value="approve" onclick="return confirm('Bạn có chắc muốn duyệt tài khoản này?')">Duyệt</button>
-{% else %}
-<span style="color:#2e7d32; font-weight:700; font-size:12px;">Đã duyệt</span>
-{% endif %}
-<button class="reject" type="submit" name="action" value="reject" onclick="return confirm('Bạn có chắc muốn từ chối tài khoản này?')">Từ chối</button>
-<button type="submit" formaction="/admin/delete" formmethod="post" style="background:#616161;" onclick="return confirm('Bạn có chắc muốn xóa tài khoản này?')">Xóa</button>
-</form>
+<button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">⋮ Tác vụ</button>
 </td>
 </tr>
 {% endfor %}
 </table>
 </div>
+
+<div class="pagination-bar">
+  <div>
+    Hiển thị:
+    <select class="js-page-size" onchange="onPageSizeChange(this)">
+      <option value="100" selected>100</option>
+      <option value="200">200</option>
+      <option value="300">300</option>
+    </select>
+    dòng / trang
+  </div>
+  <div class="pagination-controls">
+    <button type="button" class="js-prev-btn" onclick="goPrevPage()">← Trước</button>
+    <span class="js-page-info">Trang 1/1</span>
+    <button type="button" class="js-next-btn" onclick="goNextPage()">Sau →</button>
+  </div>
 </div>
+</div>
+
+<div id="rowActionMenu" class="row-action-menu hidden">
+  <button type="button" class="row-menu-item approve" id="rowMenuApprove">✅ Duyệt</button>
+  <button type="button" class="row-menu-item reject" id="rowMenuReject">❌ Từ chối</button>
+  <button type="button" class="row-menu-item" id="rowMenuChangePw">🔑 Đổi mật khẩu</button>
+  <button type="button" class="row-menu-item danger" id="rowMenuDelete">🗑️ Xóa</button>
+</div>
+<script>
+const ADMIN_PWD = "{{ pwd }}";
+</script>
 <script>
 const adminHamburgerBtn = document.getElementById('adminHamburgerBtn');
 const adminHamburgerMenu = document.getElementById('adminHamburgerMenu');
@@ -1595,20 +1727,71 @@ document.getElementById('checkAll')?.addEventListener('change', function(){
   });
 });
 
-function filterAdminTable(){
+let currentPage = 1;
+let pageSize = 100;
+
+function getAllAdminRows(){
+  return Array.from(document.querySelectorAll('#adminTable tr[data-email]'));
+}
+
+function getMatchingAdminRows(){
   const term = document.getElementById('adminSearchInput').value.trim().toLowerCase();
-  const rows = document.querySelectorAll('#adminTable tr[data-email]');
-  let visibleCount = 0;
-  rows.forEach(tr=>{
-    const email = (tr.getAttribute('data-email') || '').toLowerCase();
-    const match = email.includes(term);
-    tr.style.display = match ? '' : 'none';
-    if(match) visibleCount++;
+  const all = getAllAdminRows();
+  return term ? all.filter(tr => (tr.getAttribute('data-email') || '').toLowerCase().includes(term)) : all;
+}
+
+function updateAdminTable(){
+  const term = document.getElementById('adminSearchInput').value.trim().toLowerCase();
+  const all = getAllAdminRows();
+  const matching = getMatchingAdminRows();
+
+  const totalPages = Math.max(1, Math.ceil(matching.length / pageSize));
+  if(currentPage > totalPages) currentPage = totalPages;
+  if(currentPage < 1) currentPage = 1;
+
+  const startIdx = (currentPage - 1) * pageSize;
+  const endIdx = startIdx + pageSize;
+
+  all.forEach(tr => tr.style.display = 'none');
+  matching.forEach((tr, i) => {
+    tr.style.display = (i >= startIdx && i < endIdx) ? '' : 'none';
   });
+
   const countEl = document.getElementById('searchResultCount');
-  countEl.textContent = term ? `Tìm thấy ${visibleCount} / ${rows.length} tài khoản` : '';
+  countEl.textContent = term ? `Tìm thấy ${matching.length} / ${all.length} tài khoản` : '';
+
+  const shownFrom = matching.length === 0 ? 0 : startIdx + 1;
+  const shownTo = Math.min(endIdx, matching.length);
+  const infoText = matching.length === 0
+    ? 'Không có dữ liệu'
+    : `Trang ${currentPage}/${totalPages} (${shownFrom}-${shownTo} / ${matching.length})`;
+  document.querySelectorAll('.js-page-info').forEach(el => el.textContent = infoText);
+  document.querySelectorAll('.js-prev-btn').forEach(btn => btn.disabled = currentPage <= 1);
+  document.querySelectorAll('.js-next-btn').forEach(btn => btn.disabled = currentPage >= totalPages);
+  document.querySelectorAll('.js-page-size').forEach(sel => sel.value = String(pageSize));
+
   const checkAll = document.getElementById('checkAll');
   if(checkAll) checkAll.checked = false;
+}
+
+function onSearchInput(){
+  currentPage = 1;
+  updateAdminTable();
+}
+
+function onPageSizeChange(selectEl){
+  pageSize = parseInt(selectEl.value, 10) || 100;
+  currentPage = 1;
+  updateAdminTable();
+}
+
+function goPrevPage(){
+  if(currentPage > 1){ currentPage--; updateAdminTable(); }
+}
+
+function goNextPage(){
+  currentPage++;
+  updateAdminTable();
 }
 
 function submitBulkAction(action){
@@ -1619,7 +1802,9 @@ function submitBulkAction(action){
   }
   const confirmMessage = action === 'approve'
     ? `Bạn có chắc muốn duyệt ${selected.length} tài khoản?`
-    : `Bạn có chắc muốn từ chối ${selected.length} tài khoản?`;
+    : action === 'reject'
+    ? `Bạn có chắc muốn từ chối ${selected.length} tài khoản?`
+    : `⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN ${selected.length} tài khoản? Tác vụ này không thể hoàn tác.`;
   if(!confirm(confirmMessage)){
     return;
   }
@@ -1676,10 +1861,86 @@ function copyPassword(index){
 
   tryCopy();
 }
+
+/* ===== Menu tác vụ sổ xuống cho mỗi user (Duyệt/Từ chối, Đổi mật khẩu, Xóa) ===== */
+const rowActionMenu = document.getElementById('rowActionMenu');
+const rowMenuApprove = document.getElementById('rowMenuApprove');
+const rowMenuReject = document.getElementById('rowMenuReject');
+const rowMenuChangePw = document.getElementById('rowMenuChangePw');
+const rowMenuDelete = document.getElementById('rowMenuDelete');
+let currentRowEmail = null;
+
+function toggleRowMenu(e, btn){
+  e.stopPropagation();
+  const email = btn.getAttribute('data-email');
+  const status = (btn.getAttribute('data-status') || '').toLowerCase();
+
+  // Bấm lại đúng nút đang mở -> đóng menu
+  if(currentRowEmail === email && !rowActionMenu.classList.contains('hidden')){
+    rowActionMenu.classList.add('hidden');
+    currentRowEmail = null;
+    return;
+  }
+
+  currentRowEmail = email;
+  rowMenuApprove.classList.toggle('hidden', status === 'approved');
+
+  const rect = btn.getBoundingClientRect();
+  rowActionMenu.classList.remove('hidden');
+  // Đặt tạm để đo kích thước, rồi canh cho không tràn ra ngoài màn hình
+  const menuWidth = rowActionMenu.offsetWidth || 180;
+  const menuHeight = rowActionMenu.offsetHeight || 180;
+  let left = rect.left;
+  let top = rect.bottom + 4;
+  if(left + menuWidth > window.innerWidth - 8) left = window.innerWidth - menuWidth - 8;
+  if(top + menuHeight > window.innerHeight - 8) top = rect.top - menuHeight - 4;
+  rowActionMenu.style.left = Math.max(8, left) + 'px';
+  rowActionMenu.style.top = Math.max(8, top) + 'px';
+}
+
+rowActionMenu.addEventListener('click', e => e.stopPropagation());
+document.addEventListener('click', ()=>{ rowActionMenu.classList.add('hidden'); currentRowEmail = null; });
+
+function submitRowAction(actionUrl, extraFields){
+  const form = document.createElement('form');
+  form.method = 'post';
+  form.action = actionUrl;
+  form.style.display = 'none';
+  const fields = Object.assign({ pwd: ADMIN_PWD, email: currentRowEmail }, extraFields || {});
+  for(const key in fields){
+    const inp = document.createElement('input');
+    inp.type = 'hidden';
+    inp.name = key;
+    inp.value = fields[key];
+    form.appendChild(inp);
+  }
+  document.body.appendChild(form);
+  form.submit();
+}
+
+rowMenuApprove.onclick = ()=>{
+  if(!confirm('Bạn có chắc muốn duyệt tài khoản này?')) return;
+  submitRowAction('/admin/decision', {action: 'approve'});
+};
+rowMenuReject.onclick = ()=>{
+  if(!confirm('Bạn có chắc muốn từ chối tài khoản này?')) return;
+  submitRowAction('/admin/decision', {action: 'reject'});
+};
+rowMenuDelete.onclick = ()=>{
+  if(!confirm('⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN tài khoản này? Tác vụ này không thể hoàn tác.')) return;
+  submitRowAction('/admin/delete', {});
+};
+rowMenuChangePw.onclick = ()=>{
+  const newPw = window.prompt('Nhập mật khẩu mới cho tài khoản ' + currentRowEmail + ':');
+  if(newPw === null) return;
+  if(newPw.trim().length < 4){ alert('Mật khẩu phải có ít nhất 4 ký tự.'); return; }
+  submitRowAction('/admin/set_password', {new_password: newPw.trim()});
+};
+
+updateAdminTable();
 </script>
 </body>
-</html>
-"""
+</html>"""
 
 @app.route("/admin")
 def admin():
@@ -1699,6 +1960,7 @@ def admin():
     rows=rows,
     stats=stats,
     is_expired=is_expired_str,
+    format_date=format_date_display,
     msg=request.args.get("msg", ""),
     error=request.args.get("error", ""),
     pwd=ADMIN_PASSWORD
@@ -1836,6 +2098,22 @@ def now_vn():
     Dùng thay cho datetime.now() để không bị lệch giờ khi server host ở múi giờ khác (thường là UTC)."""
     from datetime import timezone
     return datetime.now(timezone.utc).replace(tzinfo=None) + timedelta(hours=7)
+
+
+def format_date_display(date_str, with_time=True):
+    """Chuyển chuỗi ngày lưu nội bộ (%Y-%m-%d %H:%M:%S) sang định dạng hiển thị dd/mm/yyyy.
+    Chỉ dùng để HIỂN THỊ - dữ liệu lưu trong file/DB vẫn giữ nguyên định dạng cũ để so sánh/tính hạn."""
+    date_str = str(date_str or "").strip()
+    if not date_str:
+        return ""
+    try:
+        dt = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        try:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+        except Exception:
+            return date_str
+    return dt.strftime("%d/%m/%Y %H:%M:%S") if with_time else dt.strftime("%d/%m/%Y")
 
 
 def is_expired_str(expires_at):
@@ -2132,16 +2410,18 @@ def admin_download_user_template():
     
     sample_data = [
         {
+            "TT": "1",
             "Email": "nguyenvana@agribank.com.vn",
-            "MatKhau": "cn3500@",
-            "GhiChu": "Phòng Kế toán",
-            "HanSuDungNgay": 365
+            "Mật khẩu": "cn3500@",
+            "Phòng ban": "Phòng Kế toán",
+            "Hạn sử dụng (ngày)": 365
         },
         {
+            "TT": "2",
             "Email": "tranvanb@gmail.com",
-            "MatKhau": "123456",
-            "GhiChu": "Phòng Tín dụng",
-            "HanSuDungNgay": 180
+            "Mật khẩu": "cnc@123",
+            "Phòng ban": "Phòng Tín dụng",
+            "Hạn sử dụng (ngày)": 180
         }
     ]
     df = pd.DataFrame(sample_data)
@@ -2175,16 +2455,19 @@ def admin_upload_users():
     now_str = now.strftime("%Y-%m-%d %H:%M:%S")
     
     added_count = 0
-    skipped_count = 0
+    row_errors = []  # từng dòng lỗi: {"row": số dòng trong Excel, "email": email đọc được (nếu có), "reason": lý do cụ thể}
+    seen_emails_in_file = {}  # email -> số dòng xuất hiện lần đầu trong cùng file (phát hiện trùng lặp)
     
     col_map = {}
     for col in df_upload.columns:
         c_clean = re.sub(r'[^a-zA-Z]', '', str(col)).lower()
-        if 'email' in c_clean:
-            col_map['email'] = col
+        if 'tt' in c_clean:
+            col_map['tt'] = col
+        elif 'email' in c_clean or 'pass' in c_clean:
+                    col_map['email'] = col   
         elif 'khau' in c_clean or 'pass' in c_clean:
             col_map['password'] = col
-        elif 'chu' in c_clean or 'note' in c_clean:
+        elif 'phong' in c_clean or 'note' in c_clean:
             col_map['note'] = col
         elif 'han' in c_clean or 'ngay' in c_clean or 'expiry' in c_clean:
             col_map['expiry'] = col
@@ -2193,28 +2476,63 @@ def admin_upload_users():
     if not email_col:
         return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("File Excel không có cột Email."))
 
-    for _, row in df_upload.iterrows():
-        email = str(row.get(email_col, "") or "").strip().lower()
-        if not email or not is_valid_register_email(email):
-            skipped_count += 1
+    def _cell_str(row, col):
+        """Đọc giá trị 1 ô Excel dưới dạng chuỗi, tránh lỗi hiển thị 'nan' khi ô đang để trống."""
+        if col is None:
+            return ""
+        val = row.get(col)
+        return "" if pd.isna(val) else str(val).strip()
+
+    for pos, row in df_upload.iterrows():
+        excel_row_num = pos + 2  # +2: bù dòng tiêu đề (dòng 1) + Excel đánh số từ 1
+
+        email_cell = row.get(email_col)
+        raw_email = "" if pd.isna(email_cell) else str(email_cell).strip()
+        email = raw_email.lower()
+
+        if not email:
+            row_errors.append({"row": excel_row_num, "email": "(trống)", "reason": "Ô Email đang để trống"})
             continue
+        if not is_valid_register_email(email):
+            row_errors.append({
+                "row": excel_row_num, "email": raw_email,
+                "reason": "Email không đúng định dạng cho phép (chỉ chấp nhận đuôi @agribank.com.vn hoặc @gmail.com)"
+            })
+            continue
+        if email in seen_emails_in_file:
+            row_errors.append({
+                "row": excel_row_num, "email": raw_email,
+                "reason": f"Email bị trùng lặp với dòng {seen_emails_in_file[email]} trong cùng file này (chỉ dòng cuối cùng được áp dụng)"
+            })
+            # vẫn tiếp tục xử lý (dòng sau sẽ ghi đè dòng trước), chỉ cảnh báo cho admin biết
+
+        seen_emails_in_file[email] = excel_row_num
         
-        password = str(row.get(col_map.get('password'), "") or "").strip() if 'password' in col_map else ""
+        password = _cell_str(row, col_map.get('password')) if 'password' in col_map else ""
         if not password:
             password = DEFAULT_FIRST_PASSWORD
             
-        note = str(row.get(col_map.get('note'), "") or "").strip() if 'note' in col_map else "Nhập từ Excel"
+        note = _cell_str(row, col_map.get('note')) if 'note' in col_map else "Nhập từ Excel"
         if not note:
             note = "Nhập từ Excel"
             
-        expiry_val = row.get(col_map.get('expiry'), "") if 'expiry' in col_map else ""
+        expiry_raw_str = _cell_str(row, col_map.get('expiry')) if 'expiry' in col_map else ""
         expires_at = ""
-        try:
-            days = int(expiry_val)
-            if days > 0:
-                expires_at = (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:
-            expires_at = ""
+        if expiry_raw_str:
+            try:
+                days = int(float(expiry_raw_str))
+                if days > 0:
+                    expires_at = (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                else:
+                    row_errors.append({
+                        "row": excel_row_num, "email": raw_email,
+                        "reason": f"Cột hạn sử dụng có giá trị không hợp lệ ('{expiry_raw_str}') - đã bỏ qua, tài khoản được đặt KHÔNG GIỚI HẠN"
+                    })
+            except Exception:
+                row_errors.append({
+                    "row": excel_row_num, "email": raw_email,
+                    "reason": f"Cột hạn sử dụng không phải là số ('{expiry_raw_str}') - đã bỏ qua, tài khoản được đặt KHÔNG GIỚI HẠN"
+                })
 
         existing = df[df["email"].astype(str).str.strip().str.lower() == email]
         if not existing.empty:
@@ -2246,8 +2564,18 @@ def admin_upload_users():
             added_count += 1
 
     save_devices(df)
-    msg = f"Đã nhập/cập nhật thành công {added_count} tài khoản. Bỏ qua {skipped_count} dòng không hợp lệ."
-    return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
+
+    if not row_errors:
+        msg = f"✅ Đã nhập/cập nhật thành công toàn bộ {added_count} tài khoản, không có dòng nào lỗi."
+        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
+
+    return render_template_string(
+        UPLOAD_RESULT_HTML,
+        added_count=added_count,
+        error_count=len(row_errors),
+        row_errors=row_errors,
+        pwd=ADMIN_PASSWORD
+    )
 
 
 @app.route("/admin/decision", methods=["POST"])
@@ -2346,6 +2674,9 @@ def admin_bulk():
       df.at[idx, "active_device_id"] = ""
       df.at[idx, "updated_at"] = now
       df.at[idx, "note"] = note or "Từ chối hàng loạt"
+  if action == "delete":
+    emails_lower = [str(e).strip().lower() for e in selected]
+    df = df[~df["email"].astype(str).str.strip().str.lower().isin(emails_lower)]
   save_devices(df)
   return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
@@ -2365,6 +2696,32 @@ def admin_delete():
     df = df.drop(index=match.index[0])
     save_devices(df)
   return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
+
+
+@app.route("/admin/set_password", methods=["POST"])
+def admin_set_password():
+  if not is_admin_request():
+    return "Không có quyền"
+
+  email = (request.form.get("email") or "").strip().lower()
+  new_password = (request.form.get("new_password") or "").strip()
+  if not email:
+    return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
+  if len(new_password) < 4:
+    return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Mật khẩu mới phải có ít nhất 4 ký tự."))
+
+  df = load_devices()
+  match = df[df["email"].astype(str).str.strip().str.lower() == email]
+  if match.empty:
+    return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Không tìm thấy tài khoản này."))
+
+  idx = match.index[0]
+  df.at[idx, "password"] = hash_password(new_password)
+  df.at[idx, "raw_password"] = new_password
+  df.at[idx, "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+  save_devices(df)
+  msg = f"Đã đổi mật khẩu cho tài khoản {email}."
+  return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
 
 
 @app.route("/admin/set_expiry", methods=["POST"])
