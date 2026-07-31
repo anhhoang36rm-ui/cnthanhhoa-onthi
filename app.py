@@ -1602,7 +1602,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 
 <div class="excel-box">
   <div>
-   <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu thêm User từ Excel</a>
+   <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu thêm User</a>
   </div>
   <form method="post" action="/admin/upload_users" enctype="multipart/form-data">
     <input type="hidden" name="pwd" value="{{ pwd }}">
