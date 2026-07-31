@@ -1614,9 +1614,9 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <form id="bulkForm" method="post" action="/admin/bulk" class="bulk-bar">
 <input type="hidden" name="pwd" value="{{ pwd }}">
 <div id="bulkSelectedEmails"></div>
-<button class="approve" type="button" onclick="submitBulkAction('approve')">Duyệt hàng loạt</button>
-<button class="reject" type="button" onclick="submitBulkAction('reject')">Từ chối hàng loạt</button>
-<button type="button" style="background:#616161;" onclick="submitBulkAction('delete')">🗑️ Xóa hàng loạt</button>
+<button class="approve" type="button" onclick="submitBulkAction('approve')">Duyệt theo lô</button>
+<button class="reject" type="button" onclick="submitBulkAction('reject')">Từ chối theo lô</button>
+<button type="button" style="background:#616161;" onclick="submitBulkAction('delete')">🗑️ Xóa theo lô</button>
 </form>
 <div class="search-bar">
 <input type="search" id="adminSearchInput" placeholder="🔍 Tìm theo email..." oninput="onSearchInput()" autocomplete="off">
@@ -1640,7 +1640,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 </div>
 <div class="table-scroll">
 <table id="adminTable">
-<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Hành động</th></tr>
+<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Tác vụ</th></tr>
 {% for row in rows %}
 <tr data-email="{{ row.email }}" class="row-{{ row.status|lower }}{{ ' row-locked' if row.locked else '' }}">
 <td><input type="checkbox" class="rowCheck" name="selected_emails" value="{{ row.email }}"></td>
@@ -1699,7 +1699,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 </td>
 <td style="white-space:nowrap;">{{ format_date(row.created_at) }}</td>
 <td>
-<button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">⋮ Hành động</button>
+<button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">⋮ Tác vụ</button>
 </td>
 </tr>
 {% endfor %}
@@ -1829,7 +1829,7 @@ function submitBulkAction(action){
     ? `Bạn có chắc muốn duyệt ${selected.length} tài khoản?`
     : action === 'reject'
     ? `Bạn có chắc muốn từ chối ${selected.length} tài khoản?`
-    : `⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN ${selected.length} tài khoản? Hành động này không thể hoàn tác.`;
+    : `⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN ${selected.length} tài khoản? Tác vụ này không thể hoàn tác.`;
   if(!confirm(confirmMessage)){
     return;
   }
@@ -1887,7 +1887,7 @@ function copyPassword(index){
   tryCopy();
 }
 
-/* ===== Menu hành động sổ xuống cho mỗi user (Duyệt/Từ chối, Đổi mật khẩu, Xóa) ===== */
+/* ===== Menu tác vụ sổ xuống cho mỗi user (Duyệt/Từ chối, Đổi mật khẩu, Xóa) ===== */
 const rowActionMenu = document.getElementById('rowActionMenu');
 const rowMenuApprove = document.getElementById('rowMenuApprove');
 const rowMenuReject = document.getElementById('rowMenuReject');
@@ -1952,7 +1952,7 @@ rowMenuReject.onclick = ()=>{
   submitRowAction('/admin/decision', {action: 'reject'});
 };
 rowMenuDelete.onclick = ()=>{
-  if(!confirm('⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN tài khoản này? Hành động này không thể hoàn tác.')) return;
+  if(!confirm('⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN tài khoản này? Tác vụ này không thể hoàn tác.')) return;
   submitRowAction('/admin/delete', {});
 };
 rowMenuChangePw.onclick = ()=>{
@@ -2726,7 +2726,7 @@ def admin_bulk():
       df.at[idx, "locked"] = False
       df.at[idx, "active_device_id"] = ""
       df.at[idx, "updated_at"] = now
-      base_note = note or "Đã duyệt hàng loạt"
+      base_note = note or "Đã duyệt theo lô"
       existing_note = str(df.at[idx, "note"] or "")
       df.at[idx, "note"] = base_note
       mail_result = send_approval_email(email, password, df.at[idx, "note"])
@@ -2742,7 +2742,7 @@ def admin_bulk():
       df.at[idx, "locked"] = False
       df.at[idx, "active_device_id"] = ""
       df.at[idx, "updated_at"] = now
-      df.at[idx, "note"] = note or "Từ chối hàng loạt"
+      df.at[idx, "note"] = note or "Từ chối theo lô"
   if action == "delete":
     emails_lower = [str(e).strip().lower() for e in selected]
     df = df[~df["email"].astype(str).str.strip().str.lower().isin(emails_lower)]
