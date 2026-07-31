@@ -866,6 +866,20 @@ async function showHeaderUserBadge(){
     }catch(err){ }
 }
 
+// Báo cho admin biết mình đang mở trang thi (dùng để hiển thị chấm 🟢 Online trong trang quản trị)
+function sendHeartbeat(){
+    fetch("/api/heartbeat", {method:"POST"}).catch(()=>{});
+}
+function startHeartbeat(){
+    sendHeartbeat();
+    setInterval(sendHeartbeat, 45000);
+    // Khi đóng tab / rời trang: báo offline ngay lập tức thay vì chờ hết hạn heartbeat.
+    // sendBeacon đảm bảo request vẫn được gửi đi ngay cả khi trang đang đóng.
+    window.addEventListener("pagehide", ()=>{
+        navigator.sendBeacon("/api/heartbeat/stop");
+    });
+}
+
 async function refreshFileInfo(){
     if(!fileSelect.value) return;
     const res = await fetch("/get_info?file="+encodeURIComponent(fileSelect.value)+"&noRepeat="+(noRepeatCheckbox.checked?"1":"0"));
@@ -891,6 +905,7 @@ async function backToSetup(){
 
 async function initQuiz(){
     showHeaderUserBadge();
+    startHeartbeat();
     const resFiles = await fetch("/list_files");
     const files = await resFiles.json();
     if(files.length>0){
@@ -1500,6 +1515,9 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 .status-dot.pending {background:#f57f17;}
 .status-dot.rejected {background:#c62828;}
 .lock-flag {margin-left:3px; cursor:default;}
+.online-dot {display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; vertical-align:middle;}
+.online-dot.online {background:#2e7d32; box-shadow:0 0 0 2px rgba(46,125,50,.2);}
+.online-dot.offline {background:#ccc;}
 /* Tô màu nhẹ cả dòng theo trạng thái - giúp nhận biết ngay cả khi lướt nhanh, không cần đọc chữ */
 #adminTable tr.row-pending {background:#fffbea;}
 #adminTable tr.row-rejected {background:#fef0f0;}
@@ -1622,11 +1640,18 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 </div>
 <div class="table-scroll">
 <table id="adminTable">
-<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Tác vụ</th></tr>
+<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Hành động</th></tr>
 {% for row in rows %}
 <tr data-email="{{ row.email }}" class="row-{{ row.status|lower }}{{ ' row-locked' if row.locked else '' }}">
 <td><input type="checkbox" class="rowCheck" name="selected_emails" value="{{ row.email }}"></td>
-<td>{{ row.email }}</td>
+<td>
+  {% if is_online(row.email) %}
+    <span class="online-dot online" title="Đang online (đang mở trang thi)"></span>
+  {% else %}
+    <span class="online-dot offline" title="Không online"></span>
+  {% endif %}
+  {{ row.email }}
+</td>
 <td>
   {% set st = row.status|lower %}
   {% if st == 'approved' %}
@@ -1674,7 +1699,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 </td>
 <td style="white-space:nowrap;">{{ format_date(row.created_at) }}</td>
 <td>
-<button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">⋮ Tác vụ</button>
+<button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">⋮ Hành động</button>
 </td>
 </tr>
 {% endfor %}
@@ -1804,7 +1829,7 @@ function submitBulkAction(action){
     ? `Bạn có chắc muốn duyệt ${selected.length} tài khoản?`
     : action === 'reject'
     ? `Bạn có chắc muốn từ chối ${selected.length} tài khoản?`
-    : `⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN ${selected.length} tài khoản? Tác vụ này không thể hoàn tác.`;
+    : `⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN ${selected.length} tài khoản? Hành động này không thể hoàn tác.`;
   if(!confirm(confirmMessage)){
     return;
   }
@@ -1862,7 +1887,7 @@ function copyPassword(index){
   tryCopy();
 }
 
-/* ===== Menu tác vụ sổ xuống cho mỗi user (Duyệt/Từ chối, Đổi mật khẩu, Xóa) ===== */
+/* ===== Menu hành động sổ xuống cho mỗi user (Duyệt/Từ chối, Đổi mật khẩu, Xóa) ===== */
 const rowActionMenu = document.getElementById('rowActionMenu');
 const rowMenuApprove = document.getElementById('rowMenuApprove');
 const rowMenuReject = document.getElementById('rowMenuReject');
@@ -1927,7 +1952,7 @@ rowMenuReject.onclick = ()=>{
   submitRowAction('/admin/decision', {action: 'reject'});
 };
 rowMenuDelete.onclick = ()=>{
-  if(!confirm('⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN tài khoản này? Tác vụ này không thể hoàn tác.')) return;
+  if(!confirm('⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN tài khoản này? Hành động này không thể hoàn tác.')) return;
   submitRowAction('/admin/delete', {});
 };
 rowMenuChangePw.onclick = ()=>{
@@ -1960,6 +1985,7 @@ def admin():
     rows=rows,
     stats=stats,
     is_expired=is_expired_str,
+    is_online=is_user_online,
     format_date=format_date_display,
     msg=request.args.get("msg", ""),
     error=request.args.get("error", ""),
@@ -2315,6 +2341,48 @@ def api_whoami():
     return jsonify({"email": email})
 
 
+# Theo dõi user đang "online" (đang mở trang thi) bằng cơ chế heartbeat:
+# trình duyệt tự động gọi /api/heartbeat mỗi ~45 giây trong khi trang /quiz đang mở.
+# LƯU Ý: dữ liệu này chỉ lưu trong bộ nhớ (RAM), nên nếu chạy server với NHIỀU worker
+# process cùng lúc (vd gunicorn --workers > 1), trạng thái online có thể không đồng nhất
+# giữa các worker. Nếu chỉ chạy 1 worker (phổ biến với quy mô nội bộ vài trăm user) thì hoạt động chính xác.
+LAST_SEEN = {}
+ONLINE_THRESHOLD_SECONDS = 90
+
+
+@app.route("/api/heartbeat", methods=["POST"])
+def api_heartbeat():
+    # Chỉ dựa vào cookie (đã được xác thực đầy đủ khi tải trang /quiz) để ghi nhận online,
+    # KHÔNG đọc lại file devices.json mỗi lần - giữ heartbeat cực nhẹ dù có hàng trăm/nghìn
+    # người online cùng lúc. Dữ liệu ghi nhận chỉ dùng để HIỂN THỊ (chấm online/offline),
+    # không ảnh hưởng bảo mật hay quyền truy cập nên đánh đổi này an toàn.
+    email = (request.cookies.get("email") or "").strip().lower()
+    device_id = (request.cookies.get("device_id") or "").strip()
+    if not email or not device_id:
+        return jsonify({"ok": False})
+    LAST_SEEN[email] = time.time()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/heartbeat/stop", methods=["POST"])
+def api_heartbeat_stop():
+    """Đánh dấu offline ngay lập tức khi người dùng đóng tab / rời trang thi
+    (trình duyệt gọi qua navigator.sendBeacon lúc trang bị đóng), thay vì phải
+    chờ tối đa ONLINE_THRESHOLD_SECONDS giây mới tự hết hạn."""
+    email = (request.cookies.get("email") or "").strip().lower()
+    if email:
+        LAST_SEEN.pop(email, None)
+    return jsonify({"ok": True})
+
+
+def is_user_online(email):
+    email = str(email or "").strip().lower()
+    last = LAST_SEEN.get(email)
+    if not last:
+        return False
+    return (time.time() - last) < ONLINE_THRESHOLD_SECONDS
+
+
 @app.route("/logout")
 def logout():
     device_id = request.cookies.get("device_id")
@@ -2329,6 +2397,7 @@ def logout():
     if email:
         SESSION_USED_QUESTIONS.pop(email.strip().lower(), None)
         save_used_questions()
+        LAST_SEEN.pop(email.strip().lower(), None)
     resp = make_response(redirect("/"))
     resp.delete_cookie("device_id")
     resp.delete_cookie("email")
