@@ -779,7 +779,7 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
 <body>
 
 <div class="app-header">
-  <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu">⋮☰</button>
+  <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu">☰</button>
   <h1>ÔN THI NGHIỆP VỤ</h1>
   <span id="headerUserBadge" class="header-user-badge hidden"><span class="user-icon">👤</span><span id="headerUserName" class="user-name"></span></span>
   <div id="hamburgerMenu" class="hamburger-menu hidden">
