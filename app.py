@@ -1661,7 +1661,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <div class="container">
 <div class="admin-topbar">
   <h2>Quản lý đăng ký</h2>
-  <button id="adminHamburgerBtn" class="admin-hamburger-btn" aria-label="Menu">🛠️</button>
+  <button id="adminHamburgerBtn" class="admin-hamburger-btn" aria-label="Menu">☰ Menu</button>
   <div id="adminHamburgerMenu" class="admin-hamburger-menu hidden">
     <a class="admin-menu-item" href="/admin/change_password">🔑 Đổi mật khẩu</a>
     <a class="admin-menu-item danger" href="/admin/logout">🚪 Thoát</a>
