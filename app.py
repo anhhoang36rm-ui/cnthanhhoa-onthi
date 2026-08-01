@@ -47,6 +47,37 @@ def set_security_headers(resp):
         resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return resp
 
+@app.errorhandler(500)
+def handle_internal_error(e):
+    """Bắt mọi lỗi 500 chưa được xử lý riêng ở nơi khác trong toàn bộ app.
+    Ghi log chi tiết ra console server (xem trong log của nền tảng hosting để debug),
+    và hiện thông báo dễ hiểu cho người dùng thay vì trang trắng 'Internal Server Error'."""
+    import traceback
+    print("=" * 60)
+    print("LỖI HỆ THỐNG (500) - xem chi tiết bên dưới:")
+    print(traceback.format_exc())
+    print("=" * 60)
+    is_admin_ctx = False
+    try:
+        is_admin_ctx = is_admin_request()
+    except Exception:
+        pass
+    if is_admin_ctx:
+        return (
+            "<div style='font-family:Arial;padding:24px;max-width:700px;margin:0 auto;'>"
+            "<h2 style='color:#c62828;'>⚠️ Có lỗi hệ thống xảy ra</h2>"
+            "<p>Lỗi đã được ghi vào log server. Vui lòng kiểm tra log trên nền tảng hosting để biết chi tiết, "
+            "hoặc gửi lại nội dung log đó để được hỗ trợ khắc phục.</p>"
+            "<p><a href='/admin'>← Quay lại trang quản trị</a></p></div>"
+        ), 500
+    return (
+        "<div style='font-family:Arial;padding:24px;max-width:500px;margin:0 auto;text-align:center;'>"
+        "<h2>Đã có lỗi xảy ra</h2>"
+        "<p>Vui lòng thử lại sau ít phút. Nếu vẫn gặp lỗi, hãy liên hệ quản trị viên.</p>"
+        "<p><a href='/'>← Về trang chủ</a></p></div>"
+    ), 500
+
+
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 DEVICES_FILE = os.path.join(DATA_DIR, "devices.json")
@@ -1414,6 +1445,53 @@ a.back-link:hover {text-decoration:underline;}
 </html>
 """
 
+UPLOAD_ERROR_HTML = """
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lỗi khi xử lý Excel</title>
+<style>
+* {box-sizing:border-box;}
+body {font-family: Arial, sans-serif; background:#f6f6f6; margin:0; padding:0; font-size:14px;}
+.container {max-width:900px; margin:16px auto; background:white; padding:18px; border-radius:12px; box-shadow:0 0 10px #aaa;}
+h2 {margin-top:0; color:#c62828;}
+.error-box {background:#ffebee; border:1px solid #ef9a9a; border-radius:10px; padding:14px; margin:12px 0;}
+.error-box strong {color:#c62828;}
+.hint-box {background:#fff8e1; border:1px solid #ffe082; border-radius:10px; padding:14px; margin:12px 0; font-size:13.5px; line-height:1.7;}
+pre {background:#2c2c2c; color:#e0e0e0; padding:12px; border-radius:8px; overflow-x:auto; font-size:12px; white-space:pre-wrap; word-break:break-word;}
+.back-link {display:inline-block; margin-top:16px; padding:10px 16px; background:#7a0026; color:white; text-decoration:none; border-radius:8px; font-weight:700;}
+.back-link:hover {background:#5c001f;}
+@media (max-width:480px){
+  .container {margin:8px; padding:12px;}
+}
+</style>
+</head>
+<body>
+<div class="container">
+  <h2>⚠️ Lỗi hệ thống khi xử lý file Excel</h2>
+  <div class="error-box">
+    <strong>Loại lỗi:</strong> {{ error_type }}<br>
+    <strong>Chi tiết:</strong> {{ error_message }}
+  </div>
+  <div class="hint-box">
+    <strong>Vài nguyên nhân thường gặp khi "máy mình chạy được, lên web bị lỗi":</strong>
+    <ul style="margin:8px 0 0; padding-left:20px;">
+      <li>Server chưa cài đủ thư viện đọc Excel (<code>openpyxl</code> cho .xlsx, <code>xlrd</code> cho .xls cũ) - kiểm tra lại <code>requirements.txt</code> đã được cài đặt đầy đủ trên server chưa.</li>
+      <li>File Excel dùng định dạng .xls cũ (Excel 97-2003) thay vì .xlsx - thử lưu lại file dưới dạng .xlsx rồi upload lại.</li>
+      <li>Môi trường server hạn chế không hỗ trợ thuật toán mã hoá mật khẩu mặc định (đã có cơ chế tự chuyển sang phương án dự phòng, nhưng nếu vẫn lỗi thì đây có thể là nguyên nhân sâu hơn).</li>
+      <li>Thư mục lưu dữ liệu trên server không có quyền ghi.</li>
+    </ul>
+  </div>
+  <p><strong>Log chi tiết (đã được ghi vào log server để kiểm tra thêm nếu cần):</strong></p>
+  <pre>{{ error_detail }}</pre>
+  <a class="back-link" href="/admin?pwd={{ pwd }}">← Quay lại trang quản trị</a>
+</div>
+</body>
+</html>
+"""
+
 UPLOAD_RESULT_HTML = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -1602,7 +1680,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 
 <div class="excel-box">
   <div>
-   <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu thêm User</a>
+   <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu thêm User từ Excel</a>
   </div>
   <form method="post" action="/admin/upload_users" enctype="multipart/form-data">
     <input type="hidden" name="pwd" value="{{ pwd }}">
@@ -1614,9 +1692,9 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <form id="bulkForm" method="post" action="/admin/bulk" class="bulk-bar">
 <input type="hidden" name="pwd" value="{{ pwd }}">
 <div id="bulkSelectedEmails"></div>
-<button class="approve" type="button" onclick="submitBulkAction('approve')">Duyệt theo lô</button>
-<button class="reject" type="button" onclick="submitBulkAction('reject')">Từ chối theo lô</button>
-<button type="button" style="background:#616161;" onclick="submitBulkAction('delete')">🗑️ Xóa theo lô</button>
+<button class="approve" type="button" onclick="submitBulkAction('approve')">Duyệt hàng loạt</button>
+<button class="reject" type="button" onclick="submitBulkAction('reject')">Từ chối hàng loạt</button>
+<button type="button" style="background:#616161;" onclick="submitBulkAction('delete')">🗑️ Xóa hàng loạt</button>
 </form>
 <div class="search-bar">
 <input type="search" id="adminSearchInput" placeholder="🔍 Tìm theo email..." oninput="onSearchInput()" autocomplete="off">
@@ -1640,7 +1718,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 </div>
 <div class="table-scroll">
 <table id="adminTable">
-<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Tác vụ</th></tr>
+<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Hành động</th></tr>
 {% for row in rows %}
 <tr data-email="{{ row.email }}" class="row-{{ row.status|lower }}{{ ' row-locked' if row.locked else '' }}">
 <td><input type="checkbox" class="rowCheck" name="selected_emails" value="{{ row.email }}"></td>
@@ -1699,7 +1777,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 </td>
 <td style="white-space:nowrap;">{{ format_date(row.created_at) }}</td>
 <td>
-<button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">⋮ Tác vụ</button>
+<button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">⋮ Hành động</button>
 </td>
 </tr>
 {% endfor %}
@@ -1829,7 +1907,7 @@ function submitBulkAction(action){
     ? `Bạn có chắc muốn duyệt ${selected.length} tài khoản?`
     : action === 'reject'
     ? `Bạn có chắc muốn từ chối ${selected.length} tài khoản?`
-    : `⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN ${selected.length} tài khoản? Tác vụ này không thể hoàn tác.`;
+    : `⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN ${selected.length} tài khoản? Hành động này không thể hoàn tác.`;
   if(!confirm(confirmMessage)){
     return;
   }
@@ -1887,7 +1965,7 @@ function copyPassword(index){
   tryCopy();
 }
 
-/* ===== Menu tác vụ sổ xuống cho mỗi user (Duyệt/Từ chối, Đổi mật khẩu, Xóa) ===== */
+/* ===== Menu hành động sổ xuống cho mỗi user (Duyệt/Từ chối, Đổi mật khẩu, Xóa) ===== */
 const rowActionMenu = document.getElementById('rowActionMenu');
 const rowMenuApprove = document.getElementById('rowMenuApprove');
 const rowMenuReject = document.getElementById('rowMenuReject');
@@ -1952,7 +2030,7 @@ rowMenuReject.onclick = ()=>{
   submitRowAction('/admin/decision', {action: 'reject'});
 };
 rowMenuDelete.onclick = ()=>{
-  if(!confirm('⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN tài khoản này? Tác vụ này không thể hoàn tác.')) return;
+  if(!confirm('⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN tài khoản này? Hành động này không thể hoàn tác.')) return;
   submitRowAction('/admin/delete', {});
 };
 rowMenuChangePw.onclick = ()=>{
@@ -2163,7 +2241,13 @@ def generate_code(length=8):
 
 
 def hash_password(password):
-    return generate_password_hash(password)
+    try:
+        return generate_password_hash(password)
+    except Exception:
+        # Một số môi trường hosting hạn chế (thiếu hỗ trợ scrypt trong OpenSSL) sẽ báo lỗi
+        # ngay tại bước này dù đọc Excel bình thường - đây thường là nguyên nhân gây lỗi
+        # "chạy máy mình được, lên web bị lỗi". Dự phòng bằng pbkdf2 (được hỗ trợ rộng rãi hơn).
+        return generate_password_hash(password, method="pbkdf2:sha256")
 
 
 def verify_password(password, stored_hash):
@@ -2509,11 +2593,33 @@ def admin_download_user_template():
 def admin_upload_users():
     if not is_admin_request():
         return "Không có quyền"
-    
+
     file = request.files.get("excel_file")
     if not file or not file.filename:
         return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Chưa chọn file Excel."))
-    
+
+    try:
+        return _handle_upload_users(file)
+    except Exception as e:
+        # Bắt TOÀN BỘ lỗi phát sinh trong lúc xử lý (kể cả những lỗi chỉ xảy ra trên server,
+        # không xảy ra khi chạy ở máy cá nhân) - in traceback đầy đủ ra log server để debug,
+        # đồng thời hiện thông báo rõ ràng cho admin thay vì trang "Internal Server Error" trắng.
+        import traceback
+        error_detail = traceback.format_exc()
+        print("=" * 60)
+        print("LỖI KHI UPLOAD EXCEL (xem chi tiết bên dưới):")
+        print(error_detail)
+        print("=" * 60)
+        return render_template_string(
+            UPLOAD_ERROR_HTML,
+            error_type=type(e).__name__,
+            error_message=str(e),
+            error_detail=error_detail,
+            pwd=ADMIN_PASSWORD
+        ), 500
+
+
+def _handle_upload_users(file):
     try:
         df_upload = pd.read_excel(file)
     except Exception as e:
@@ -2532,9 +2638,11 @@ def admin_upload_users():
         c_clean = re.sub(r'[^a-zA-Z]', '', str(col)).lower()
         if 'tt' in c_clean:
             col_map['tt'] = col
-        elif 'email' in c_clean or 'pass' in c_clean:
-                    col_map['email'] = col   
-        elif 'khau' in c_clean or 'pass' in c_clean:
+        elif 'khau' in c_clean:
+            col_map['password'] = col
+        elif 'email' in c_clean:
+            col_map['email'] = col
+        elif 'pass' in c_clean and 'password' not in col_map:
             col_map['password'] = col
         elif 'phong' in c_clean or 'note' in c_clean:
             col_map['note'] = col
@@ -2726,7 +2834,7 @@ def admin_bulk():
       df.at[idx, "locked"] = False
       df.at[idx, "active_device_id"] = ""
       df.at[idx, "updated_at"] = now
-      base_note = note or "Đã duyệt theo lô"
+      base_note = note or "Đã duyệt hàng loạt"
       existing_note = str(df.at[idx, "note"] or "")
       df.at[idx, "note"] = base_note
       mail_result = send_approval_email(email, password, df.at[idx, "note"])
@@ -2742,7 +2850,7 @@ def admin_bulk():
       df.at[idx, "locked"] = False
       df.at[idx, "active_device_id"] = ""
       df.at[idx, "updated_at"] = now
-      df.at[idx, "note"] = note or "Từ chối theo lô"
+      df.at[idx, "note"] = note or "Từ chối hàng loạt"
   if action == "delete":
     emails_lower = [str(e).strip().lower() for e in selected]
     df = df[~df["email"].astype(str).str.strip().str.lower().isin(emails_lower)]
