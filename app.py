@@ -779,7 +779,7 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
 <body>
 
 <div class="app-header">
-  <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu">☰</button>
+  <button id="hamburgerBtn" class="hamburger-btn" aria-label="Menu">⋮☰</button>
   <h1>ÔN THI NGHIỆP VỤ</h1>
   <span id="headerUserBadge" class="header-user-badge hidden"><span class="user-icon">👤</span><span id="headerUserName" class="user-name"></span></span>
   <div id="hamburgerMenu" class="hamburger-menu hidden">
@@ -1661,7 +1661,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <div class="container">
 <div class="admin-topbar">
   <h2>Quản lý đăng ký</h2>
-  <button id="adminHamburgerBtn" class="admin-hamburger-btn" aria-label="Menu">☰</button>
+  <button id="adminHamburgerBtn" class="admin-hamburger-btn" aria-label="Menu">🛠️</button>
   <div id="adminHamburgerMenu" class="admin-hamburger-menu hidden">
     <a class="admin-menu-item" href="/admin/change_password">🔑 Đổi mật khẩu</a>
     <a class="admin-menu-item danger" href="/admin/logout">🚪 Thoát</a>
@@ -1680,7 +1680,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 
 <div class="excel-box">
   <div>
-   <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu thêm User từ Excel</a>
+   <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu thêm User</a>
   </div>
   <form method="post" action="/admin/upload_users" enctype="multipart/form-data">
     <input type="hidden" name="pwd" value="{{ pwd }}">
@@ -1692,9 +1692,9 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <form id="bulkForm" method="post" action="/admin/bulk" class="bulk-bar">
 <input type="hidden" name="pwd" value="{{ pwd }}">
 <div id="bulkSelectedEmails"></div>
-<button class="approve" type="button" onclick="submitBulkAction('approve')">Duyệt hàng loạt</button>
-<button class="reject" type="button" onclick="submitBulkAction('reject')">Từ chối hàng loạt</button>
-<button type="button" style="background:#616161;" onclick="submitBulkAction('delete')">🗑️ Xóa hàng loạt</button>
+<button class="approve" type="button" onclick="submitBulkAction('approve')">Duyệt theo lô</button>
+<button class="reject" type="button" onclick="submitBulkAction('reject')">Từ chối theo lô</button>
+<button type="button" style="background:#616161;" onclick="submitBulkAction('delete')">🗑️ Xóa theo lô</button>
 </form>
 <div class="search-bar">
 <input type="search" id="adminSearchInput" placeholder="🔍 Tìm theo email..." oninput="onSearchInput()" autocomplete="off">
@@ -1718,7 +1718,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 </div>
 <div class="table-scroll">
 <table id="adminTable">
-<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Hành động</th></tr>
+<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Tác vụ</th></tr>
 {% for row in rows %}
 <tr data-email="{{ row.email }}" class="row-{{ row.status|lower }}{{ ' row-locked' if row.locked else '' }}">
 <td><input type="checkbox" class="rowCheck" name="selected_emails" value="{{ row.email }}"></td>
@@ -1777,7 +1777,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 </td>
 <td style="white-space:nowrap;">{{ format_date(row.created_at) }}</td>
 <td>
-<button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">⋮ Hành động</button>
+<button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">🛠️ Tác vụ</button>
 </td>
 </tr>
 {% endfor %}
@@ -1907,7 +1907,7 @@ function submitBulkAction(action){
     ? `Bạn có chắc muốn duyệt ${selected.length} tài khoản?`
     : action === 'reject'
     ? `Bạn có chắc muốn từ chối ${selected.length} tài khoản?`
-    : `⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN ${selected.length} tài khoản? Hành động này không thể hoàn tác.`;
+    : `⚠️ Bạn có chắc muốn xóa vĩnh viễn ${selected.length} tài khoản?`;
   if(!confirm(confirmMessage)){
     return;
   }
@@ -1965,7 +1965,7 @@ function copyPassword(index){
   tryCopy();
 }
 
-/* ===== Menu hành động sổ xuống cho mỗi user (Duyệt/Từ chối, Đổi mật khẩu, Xóa) ===== */
+/* ===== Menu tác vụ sổ xuống cho mỗi user (Duyệt/Từ chối, Đổi mật khẩu, Xóa) ===== */
 const rowActionMenu = document.getElementById('rowActionMenu');
 const rowMenuApprove = document.getElementById('rowMenuApprove');
 const rowMenuReject = document.getElementById('rowMenuReject');
@@ -2030,7 +2030,7 @@ rowMenuReject.onclick = ()=>{
   submitRowAction('/admin/decision', {action: 'reject'});
 };
 rowMenuDelete.onclick = ()=>{
-  if(!confirm('⚠️ Bạn có chắc muốn XÓA VĨNH VIỄN tài khoản này? Hành động này không thể hoàn tác.')) return;
+  if(!confirm('⚠️ Bạn có chắc muốn xóa vĩnh viễn tài khoản này?')) return;
   submitRowAction('/admin/delete', {});
 };
 rowMenuChangePw.onclick = ()=>{
@@ -2834,7 +2834,7 @@ def admin_bulk():
       df.at[idx, "locked"] = False
       df.at[idx, "active_device_id"] = ""
       df.at[idx, "updated_at"] = now
-      base_note = note or "Đã duyệt hàng loạt"
+      base_note = note or "Đã duyệt theo lô"
       existing_note = str(df.at[idx, "note"] or "")
       df.at[idx, "note"] = base_note
       mail_result = send_approval_email(email, password, df.at[idx, "note"])
@@ -2850,7 +2850,7 @@ def admin_bulk():
       df.at[idx, "locked"] = False
       df.at[idx, "active_device_id"] = ""
       df.at[idx, "updated_at"] = now
-      df.at[idx, "note"] = note or "Từ chối hàng loạt"
+      df.at[idx, "note"] = note or "Từ chối theo lô"
   if action == "delete":
     emails_lower = [str(e).strip().lower() for e in selected]
     df = df[~df["email"].astype(str).str.strip().str.lower().isin(emails_lower)]
