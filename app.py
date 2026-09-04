@@ -81,6 +81,7 @@ def handle_internal_error(e):
 DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 DEVICES_FILE = os.path.join(DATA_DIR, "devices.json")
+LOGIN_LOG_FILE = os.path.join(DATA_DIR, "login_logs.json")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
@@ -227,6 +228,36 @@ def save_used_questions():
 
 
 SESSION_USED_QUESTIONS = load_used_questions()
+
+
+def load_login_logs():
+  if not os.path.exists(LOGIN_LOG_FILE):
+    return []
+  try:
+    with open(LOGIN_LOG_FILE, "r", encoding="utf-8") as f:
+      data = json.load(f)
+    return data if isinstance(data, list) else []
+  except Exception:
+    return []
+
+
+def save_login_logs(logs):
+  try:
+    with open(LOGIN_LOG_FILE, "w", encoding="utf-8") as f:
+      json.dump(logs[-2000:], f, ensure_ascii=False, indent=2)
+  except Exception:
+    pass
+
+
+def record_login(email, success=True):
+  logs = load_login_logs()
+  logs.append({
+    "email": str(email or "").strip().lower(),
+    "time": now_vn().strftime("%Y-%m-%d %H:%M:%S"),
+    "success": bool(success),
+    "ip": request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+  })
+  save_login_logs(logs)
 ADMIN_LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -367,6 +398,12 @@ input:focus {
   outline:none;
   box-shadow:0 0 0 3px rgba(122,0,38,.12);
 }
+.password-wrap {position:relative;}
+.password-wrap input {padding-right:58px;}
+.password-toggle {position:absolute; right:4px; top:4px; width:auto; padding:8px 7px; background:#fff5f6; color:#7a0026; font-size:12px;}
+.email-suggestions {display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;}
+.email-suggestion {width:auto; padding:6px 9px; border:1px solid #e3d3cc; border-radius:7px; background:#fff5f6; color:#7a0026; font-size:12px; cursor:pointer;}
+.email-suggestion:hover {background:#f6dce1;}
 .button-group {
   display:flex;
   gap:12px;
@@ -458,11 +495,12 @@ button {
         <h2 class="section-title">ÔN THI NGHIỆP VỤ</h2>
         <div class="form-group">
           <label for="loginEmail">Email</label>
-          <input type="email" id="loginEmail" inputmode="email" autocomplete="username" placeholder="ví dụ: nguyenvanA@agribank.com.vn">
+          <input type="text" id="loginEmail" inputmode="email" autocomplete="username" placeholder="Nhập tên email">
+          <div id="loginEmailSuggestions" class="email-suggestions hidden"></div>
         </div>
         <div class="form-group">
           <label for="loginPassword">Mật khẩu</label>
-          <input type="password" id="loginPassword" autocomplete="current-password" placeholder="Nhập mật khẩu">
+          <div class="password-wrap"><input type="password" id="loginPassword" autocomplete="current-password" placeholder="Nhập mật khẩu"><button type="button" class="password-toggle" data-target="loginPassword">Hiện</button></div>
         </div>
         <div class="button-group">
           <button id="loginBtn" class="primary-btn">Đăng nhập</button>
@@ -481,7 +519,8 @@ button {
         <h2 class="section-title">ĐĂNG KÝ</h2>
         <div class="form-group">
           <label for="registerEmail">Email</label>
-          <input type="email" id="registerEmail" inputmode="email" autocomplete="username" placeholder="ví dụ: nguyenvanA@agribank.com.vn">
+          <input type="text" id="registerEmail" inputmode="email" autocomplete="username" placeholder="Nhập tên email">
+          <div id="registerEmailSuggestions" class="email-suggestions hidden"></div>
         </div>
         <div class="button-group">
           <button id="registerBtn" class="primary-btn">Gửi đăng ký</button>
@@ -505,6 +544,44 @@ function isValidEmail(email) {
   const normalized = (email || '').toLowerCase();
   return normalized === 'admin' || /^\S+@(agribank\.com\.vn|gmail\.com)$/.test(normalized);
 }
+
+document.querySelectorAll('.password-toggle').forEach(button => {
+  button.addEventListener('click', () => {
+    const input = document.getElementById(button.dataset.target);
+    input.type = input.type === 'password' ? 'text' : 'password';
+    button.textContent = input.type === 'password' ? 'Hiện' : 'Ẩn';
+  });
+});
+
+function setupEmailSuggestions(inputId, suggestionsId) {
+  const input = document.getElementById(inputId);
+  const suggestions = document.getElementById(suggestionsId);
+  const domains = ['@agribank.com.vn', '@gmail.com'];
+  input.addEventListener('input', () => {
+    const value = input.value.trim();
+    suggestions.innerHTML = '';
+    if (!value || value.includes('@')) {
+      suggestions.classList.add('hidden');
+      return;
+    }
+    domains.forEach(domain => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'email-suggestion';
+      button.textContent = domain;
+      button.addEventListener('click', () => {
+        input.value = value.replace(/\s+/g, '') + domain;
+        suggestions.classList.add('hidden');
+        input.focus();
+      });
+      suggestions.appendChild(button);
+    });
+    suggestions.classList.remove('hidden');
+  });
+}
+
+setupEmailSuggestions('loginEmail', 'loginEmailSuggestions');
+setupEmailSuggestions('registerEmail', 'registerEmailSuggestions');
 
 function showPanel(panelToShow) {
   const loginDiv = document.getElementById("loginDiv");
@@ -1324,6 +1401,10 @@ label {display:block; margin-bottom:8px; font-weight:600;}
 input {width:100%; padding:12px 14px; border:1px solid #ddd; border-radius:12px; font-size:16px;}
 button {width:100%; padding:14px; border:none; border-radius:12px; background:#7a0026; color:white; font-weight:700; cursor:pointer; font-size:16px;}
 button:hover {background:#5c001f;}
+.password-wrap {position:relative;}
+.password-wrap input {padding-right:68px;}
+.password-toggle {position:absolute; top:4px; right:4px; width:auto; padding:8px 9px; background:#fff0f2; color:#7a0026; font-size:12px;}
+.password-toggle:hover {background:#f6dce1;}
 .message {min-height:22px; margin-top:14px; font-size:14px; word-break:break-word;}
 .message.success {color:#0f6a4f;}
 .message.error {color:#b91c1c;}
@@ -1409,6 +1490,10 @@ label {display:block; margin-bottom:8px; font-weight:600;}
 input {width:100%; padding:12px 14px; border:1px solid #ddd; border-radius:12px; font-size:16px;}
 button {width:100%; padding:14px; border:none; border-radius:12px; background:#7a0026; color:white; font-weight:700; cursor:pointer; font-size:16px;}
 button:hover {background:#5c001f;}
+.password-wrap {position:relative;}
+.password-wrap input {padding-right:68px;}
+.password-toggle {position:absolute; top:4px; right:4px; width:auto; padding:8px 9px; border-radius:8px; background:#fff0f2; color:#7a0026; font-size:12px;}
+.password-toggle:hover {background:#f6dce1;}
 .message {min-height:22px; margin-top:14px; font-size:14px; word-break:break-word;}
 .message.success {color:#0f6a4f;}
 .message.error {color:#b91c1c;}
@@ -1425,15 +1510,15 @@ a.back-link:hover {text-decoration:underline;}
   <form method="post" action="/admin/change_password">
     <div class="form-group">
       <label for="currentPassword">Mật khẩu hiện tại</label>
-      <input type="password" id="currentPassword" name="currentPassword" placeholder="Nhập mật khẩu hiện tại" required>
+      <div class="password-wrap"><input type="password" id="currentPassword" name="currentPassword" placeholder="Nhập mật khẩu hiện tại" required><button type="button" class="password-toggle" data-target="currentPassword">Hiện</button></div>
     </div>
     <div class="form-group">
       <label for="newPassword">Mật khẩu mới</label>
-      <input type="password" id="newPassword" name="newPassword" placeholder="Tối thiểu 6 ký tự" required>
+      <div class="password-wrap"><input type="password" id="newPassword" name="newPassword" placeholder="Tối thiểu 6 ký tự" required><button type="button" class="password-toggle" data-target="newPassword">Hiện</button></div>
     </div>
     <div class="form-group">
       <label for="confirmPassword">Xác nhận mật khẩu mới</label>
-      <input type="password" id="confirmPassword" name="confirmPassword" placeholder="Nhập lại mật khẩu mới" required>
+      <div class="password-wrap"><input type="password" id="confirmPassword" name="confirmPassword" placeholder="Nhập lại mật khẩu mới" required><button type="button" class="password-toggle" data-target="confirmPassword">Hiện</button></div>
     </div>
     <button type="submit">Lưu mật khẩu mới</button>
   </form>
@@ -1441,6 +1526,16 @@ a.back-link:hover {text-decoration:underline;}
   {% if success %}<p class="message success">{{ success }}</p>{% endif %}
   <a class="back-link" href="/admin?pwd={{ pwd }}">← Quay lại trang quản trị</a>
 </div>
+<script>
+document.querySelectorAll('.password-toggle').forEach(button => {
+  button.addEventListener('click', () => {
+    const input = document.getElementById(button.dataset.target);
+    const isHidden = input.type === 'password';
+    input.type = isHidden ? 'text' : 'password';
+    button.textContent = isHidden ? 'Ẩn' : 'Hiện';
+  });
+});
+</script>
 </body>
 </html>
 """
@@ -1555,6 +1650,8 @@ ADMIN_HTML = """
 * {box-sizing:border-box;}
 body {font-family: Arial, sans-serif; background:#f6f6f6; margin:0; padding:0; font-size:14px;}
 .container {max-width:1100px; margin:16px auto; background:white; padding:16px; border-radius:12px; box-shadow:0 0 10px #aaa;}
+.admin-topbar {background:#a9002b; margin:-16px -16px 16px; padding:16px; justify-content:center; border-radius:12px 12px 0 0;}
+.admin-topbar h2 {text-transform:uppercase; text-align:center; flex:1; color:#ffffff;}
 h2 {margin-top:0; font-size:18px;}
 .summary {display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 14px;}
 .summary div {background:#f5f5f5; padding:8px 10px; border-radius:8px; min-width:100px; flex:1 1 100px; font-size:12.5px; line-height:1.5;}
@@ -1578,6 +1675,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 .search-bar input[type="search"]:focus {outline:none; border-color:#7a0026; box-shadow:0 0 0 3px rgba(122,0,38,.12);}
 .search-count {font-size:12px; color:#666; white-space:nowrap;}
 .pagination-bar {display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:8px 0 4px; font-size:12.5px; color:#444;}
+.pagination-footer {margin:16px -16px -16px; padding:12px 16px; background:#fff0f2; border-top:1px solid #f1c1c9; border-radius:0 0 12px 12px; color:#7a0026;}
 .pagination-bar select {padding:4px 6px; font-size:12.5px; border-radius:6px;}
 .pagination-controls {display:flex; align-items:center; gap:8px;}
 .pagination-controls button {padding:5px 10px; font-size:12.5px; background:#7a0026;}
@@ -1663,6 +1761,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
   <h2>Quản lý đăng ký</h2>
   <button id="adminHamburgerBtn" class="admin-hamburger-btn" aria-label="Menu">☰ Menu</button>
   <div id="adminHamburgerMenu" class="admin-hamburger-menu hidden">
+    <a class="admin-menu-item" href="/admin/login_logs">🕘 Xem log đăng nhập</a>
     <a class="admin-menu-item" href="/admin/change_password">🔑 Đổi mật khẩu</a>
     <a class="admin-menu-item danger" href="/admin/logout">🚪 Thoát</a>
   </div>
@@ -1718,9 +1817,9 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 </div>
 <div class="table-scroll">
 <table id="adminTable">
-<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Mật khẩu</th><th>Ngày đăng ký</th><th>Tác vụ</th></tr>
+<tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Ngày đăng ký</th><th>Lần đăng nhập gần nhất</th><th>Tác vụ</th></tr>
 {% for row in rows %}
-<tr data-email="{{ row.email }}" class="row-{{ row.status|lower }}{{ ' row-locked' if row.locked else '' }}">
+<tr data-email="{{ row.email }}" data-password="{{ row.raw_password }}" class="row-{{ row.status|lower }}{{ ' row-locked' if row.locked else '' }}">
 <td><input type="checkbox" class="rowCheck" name="selected_emails" value="{{ row.email }}"></td>
 <td>
   {% if is_online(row.email) %}
@@ -1765,17 +1864,8 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
     <button type="submit" name="expiry_action" value="clear" style="background:#616161;" onclick="return confirm('Bỏ giới hạn (cho phép dùng không thời hạn)?')">Bỏ hạn</button>
   </form>
 </td>
-<td>
-  {% if row.raw_password %}
-  <div class="pw-cell">
-    <span id="pw-{{ loop.index }}">{{ row.raw_password }}</span>
-    <button type="button" onclick="copyPassword({{ loop.index }})" style="background:#1976d2;">Copy</button>
-  </div>
-  {% else %}
-    —
-  {% endif %}
-</td>
 <td style="white-space:nowrap;">{{ format_date(row.created_at) }}</td>
+<td style="white-space:nowrap;">{{ format_date(row.last_login_at) if row.last_login_at else 'Chưa đăng nhập' }}</td>
 <td>
 <button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">🛠️ Tác vụ</button>
 </td>
@@ -1784,7 +1874,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 </table>
 </div>
 
-<div class="pagination-bar">
+<div class="pagination-bar pagination-footer">
   <div>
     Hiển thị:
     <select class="js-page-size" onchange="onPageSizeChange(this)">
@@ -1805,6 +1895,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <div id="rowActionMenu" class="row-action-menu hidden">
   <button type="button" class="row-menu-item approve" id="rowMenuApprove">✅ Duyệt</button>
   <button type="button" class="row-menu-item reject" id="rowMenuReject">❌ Từ chối</button>
+  <button type="button" class="row-menu-item" id="rowMenuViewPw">🔐 Xem / copy mật khẩu</button>
   <button type="button" class="row-menu-item" id="rowMenuChangePw">🔑 Đổi mật khẩu</button>
   <button type="button" class="row-menu-item danger" id="rowMenuDelete">🗑️ Xóa</button>
 </div>
@@ -1970,6 +2061,7 @@ const rowActionMenu = document.getElementById('rowActionMenu');
 const rowMenuApprove = document.getElementById('rowMenuApprove');
 const rowMenuReject = document.getElementById('rowMenuReject');
 const rowMenuChangePw = document.getElementById('rowMenuChangePw');
+const rowMenuViewPw = document.getElementById('rowMenuViewPw');
 const rowMenuDelete = document.getElementById('rowMenuDelete');
 let currentRowEmail = null;
 
@@ -2033,6 +2125,12 @@ rowMenuDelete.onclick = ()=>{
   if(!confirm('⚠️ Bạn có chắc muốn xóa vĩnh viễn tài khoản này?')) return;
   submitRowAction('/admin/delete', {});
 };
+rowMenuViewPw.onclick = ()=>{
+  const row = getAllAdminRows().find(item => item.getAttribute('data-email') === currentRowEmail);
+  const password = row ? row.getAttribute('data-password') : '';
+  if(!password){ alert('Tài khoản chưa có mật khẩu.'); return; }
+  window.prompt('Mật khẩu của ' + currentRowEmail + ' (có thể copy):', password);
+};
 rowMenuChangePw.onclick = ()=>{
   const newPw = window.prompt('Nhập mật khẩu mới cho tài khoản ' + currentRowEmail + ':');
   if(newPw === null) return;
@@ -2075,6 +2173,21 @@ def is_admin_request():
   return request.cookies.get("admin_auth") == "1" or request.args.get("pwd", "") == ADMIN_PASSWORD
 
 
+LOGIN_LOGS_HTML = """
+<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log đăng nhập</title><style>body{font-family:Arial;background:#f6f6f6;margin:0;padding:16px}.box{max-width:900px;margin:auto;background:#fff;padding:16px;border-radius:12px}.head{background:#f6c4cc;margin:-16px -16px 16px;padding:16px;text-align:center;color:#7a0026;font-weight:800}table{width:100%;border-collapse:collapse}th,td{padding:8px;border:1px solid #ddd;text-align:left;font-size:13px}th{background:#fff0f2}.ok{color:#2e7d32}.fail{color:#c62828}.back{display:inline-block;margin-top:14px;color:#7a0026}</style></head>
+<body><div class="box"><div class="head">LOG ĐĂNG NHẬP HỆ THỐNG</div><table><tr><th>Email</th><th>Thời gian</th><th>Địa chỉ IP</th><th>Kết quả</th></tr>
+{% for item in logs|reverse %}<tr><td>{{ item.email }}</td><td>{{ format_date(item.time) }}</td><td>{{ item.ip }}</td><td class="{{ 'ok' if item.success else 'fail' }}">{{ 'Thành công' if item.success else 'Thất bại' }}</td></tr>{% else %}<tr><td colspan="4">Chưa có log đăng nhập.</td></tr>{% endfor %}</table><a class="back" href="/admin?pwd={{ pwd }}">← Quay lại quản trị</a></div></body></html>
+"""
+
+
+@app.route("/admin/login_logs")
+def admin_login_logs():
+  if not is_admin_request():
+    return redirect("/admin")
+  return render_template_string(LOGIN_LOGS_HTML, logs=load_login_logs(), format_date=format_date_display, pwd=ADMIN_PASSWORD)
+
+
 @app.route('/admin/logout')
 def admin_logout():
   resp = make_response(redirect('/'))
@@ -2109,7 +2222,7 @@ def admin_change_password():
 
 
 def load_devices():
-    columns = ["email", "device_id", "active_device_id", "status", "activation_code", "password", "raw_password", "locked", "created_at", "updated_at", "note", "expires_at"]
+    columns = ["email", "device_id", "active_device_id", "status", "activation_code", "password", "raw_password", "locked", "created_at", "updated_at", "note", "expires_at", "last_login_at"]
     engine = _get_db_engine()
     loaded_from_db = False
 
@@ -2154,12 +2267,13 @@ def load_devices():
     df["note"] = df["note"].fillna("").astype(str)
     df["locked"] = df["locked"].fillna(False).astype(bool)
     df["expires_at"] = df["expires_at"].fillna("").astype(str)
+    df["last_login_at"] = df["last_login_at"].fillna("").astype(str)
     df = df[columns]
     return df
 
 
 def save_devices(df):
-    columns = ["email", "device_id", "active_device_id", "status", "activation_code", "password", "raw_password", "locked", "created_at", "updated_at", "note", "expires_at"]
+    columns = ["email", "device_id", "active_device_id", "status", "activation_code", "password", "raw_password", "locked", "created_at", "updated_at", "note", "expires_at", "last_login_at"]
     df = df.copy()
     for col in columns:
         if col not in df.columns:
@@ -2176,6 +2290,7 @@ def save_devices(df):
     df["note"] = df["note"].fillna("").astype(str)
     df["locked"] = df["locked"].fillna(False).astype(bool)
     df["expires_at"] = df["expires_at"].fillna("").astype(str)
+    df["last_login_at"] = df["last_login_at"].fillna("").astype(str)
 
     engine = _get_db_engine()
     if engine is not None:
@@ -2334,7 +2449,7 @@ def register():
             return jsonify({"success": True, "msg": "Yêu cầu đăng ký đã được gửi lại và đang chờ xét duyệt."})
 
     now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
-    new_row = pd.DataFrame([{"email": email, "device_id": str(uuid.uuid4()), "active_device_id": "", "status": "pending", "activation_code": "", "password": "", "raw_password": "", "locked": False, "created_at": now, "updated_at": now, "note": "Đăng ký mới"}])
+    new_row = pd.DataFrame([{"email": email, "device_id": str(uuid.uuid4()), "active_device_id": "", "status": "pending", "activation_code": "", "password": "", "raw_password": "", "locked": False, "created_at": now, "updated_at": now, "note": "Đăng ký mới", "last_login_at": ""}])
     df = pd.concat([df, new_row], ignore_index=True)
     save_devices(df)
     return jsonify({"success": True, "msg": "Đăng ký thành công. Vui lòng chờ admin xét duyệt."})
@@ -2357,9 +2472,11 @@ def login():
     try:
         if email in ADMIN_EMAILS:
             if password != ADMIN_PASSWORD:
+                record_login(email, False)
                 record_failed_login(rl_key)
                 return jsonify({"success": False, "msg": "Email hoặc mật khẩu không đúng."})
             clear_failed_login(rl_key)
+            record_login(email, True)
             current_device_id = str(uuid.uuid4())
             resp = make_response(jsonify({"success": True, "msg": "Đăng nhập quản trị thành công.", "admin": True}))
             set_app_cookie(resp, "admin_auth", "1", 24 * 3600)
@@ -2390,6 +2507,7 @@ def login():
         record_failed_login(rl_key)
         return jsonify({"success": False, "msg": "Email hoặc mật khẩu không đúng."})
     clear_failed_login(rl_key)
+    record_login(email, True)
     if not (stored_password.startswith("pbkdf2:") or stored_password.startswith("scrypt:")):
         df.at[row.index[0], "password"] = hash_password(password)
 
@@ -2409,6 +2527,7 @@ def login():
     df.at[row.index[0], "device_id"] = current_device_id
     df.at[row.index[0], "active_device_id"] = current_device_id
     df.at[row.index[0], "updated_at"] = now
+    df.at[row.index[0], "last_login_at"] = now
     save_devices(df)
 
     resp = make_response(jsonify({"success": True, "msg": "Đăng nhập thành công"}))
@@ -2561,23 +2680,28 @@ def admin_download_user_template():
     if not is_admin_request():
         return "Không có quyền"
     
-    sample_data = [
-        {
-            "TT": "1",
-            "Email": "nguyenvana@agribank.com.vn",
-            "Mật khẩu": "cn3500@",
-            "Phòng ban": "Phòng Kế toán",
-            "Hạn sử dụng (ngày)": 365
-        },
-        {
-            "TT": "2",
-            "Email": "tranvanb@gmail.com",
-            "Mật khẩu": "cnc@123",
-            "Phòng ban": "Phòng Tín dụng",
-            "Hạn sử dụng (ngày)": 180
-        }
-    ]
-    df = pd.DataFrame(sample_data)
+    devices = load_devices()
+    now = now_vn()
+    export_rows = []
+    for number, (_, row) in enumerate(devices.iterrows(), start=1):
+      expiry_days = ""
+      if str(row.get("expires_at", "")).strip():
+        try:
+          expiry_days = max(0, (datetime.strptime(str(row["expires_at"]), "%Y-%m-%d %H:%M:%S") - now).days)
+        except Exception:
+          expiry_days = ""
+      export_rows.append({
+        "TT": number,
+        "Email": row.get("email", ""),
+        "Mật khẩu": row.get("raw_password", ""),
+            "Status": row.get("status", "pending"),
+            "Locked": "Có" if bool(row.get("locked", False)) else "Không",
+        "Phòng ban": row.get("note", ""),
+        "Hạn sử dụng (ngày)": expiry_days,
+        "Ngày đăng ký": row.get("created_at", ""),
+        "Lần đăng nhập gần nhất": row.get("last_login_at", "")
+      })
+    df = pd.DataFrame(export_rows)
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         df.to_excel(writer, index=False, sheet_name="DanhSachUser")
@@ -2648,6 +2772,10 @@ def _handle_upload_users(file):
             col_map['note'] = col
         elif 'han' in c_clean or 'ngay' in c_clean or 'expiry' in c_clean:
             col_map['expiry'] = col
+        elif 'trangthai' in c_clean or c_clean == 'status':
+          col_map['status'] = col
+        elif 'khoa' in c_clean or 'locked' in c_clean:
+          col_map['locked'] = col
 
     email_col = col_map.get('email', df_upload.columns[0] if len(df_upload.columns) > 0 else None)
     if not email_col:
@@ -2692,6 +2820,11 @@ def _handle_upload_users(file):
         note = _cell_str(row, col_map.get('note')) if 'note' in col_map else "Nhập từ Excel"
         if not note:
             note = "Nhập từ Excel"
+
+        status = _cell_str(row, col_map.get('status')).lower() if 'status' in col_map else "approved"
+        status = status if status in {"approved", "pending", "rejected"} else "approved"
+        locked_value = _cell_str(row, col_map.get('locked')).lower() if 'locked' in col_map else "không"
+        locked = locked_value in {"có", "co", "yes", "true", "1", "đã khóa"}
             
         expiry_raw_str = _cell_str(row, col_map.get('expiry')) if 'expiry' in col_map else ""
         expires_at = ""
@@ -2714,9 +2847,10 @@ def _handle_upload_users(file):
         existing = df[df["email"].astype(str).str.strip().str.lower() == email]
         if not existing.empty:
             idx = existing.index[0]
-            df.at[idx, "status"] = "approved"
+            df.at[idx, "status"] = status
             df.at[idx, "password"] = hash_password(password)
             df.at[idx, "raw_password"] = password
+            df.at[idx, "locked"] = locked
             df.at[idx, "note"] = note
             if expires_at:
                 df.at[idx, "expires_at"] = expires_at
@@ -2727,11 +2861,11 @@ def _handle_upload_users(file):
                 "email": email,
                 "device_id": str(uuid.uuid4()),
                 "active_device_id": "",
-                "status": "approved",
+                "status": status,
                 "activation_code": generate_code(),
                 "password": hash_password(password),
                 "raw_password": password,
-                "locked": False,
+                "locked": locked,
                 "created_at": now_str,
                 "updated_at": now_str,
                 "note": note,
