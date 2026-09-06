@@ -236,15 +236,37 @@ def load_login_logs():
   try:
     with open(LOGIN_LOG_FILE, "r", encoding="utf-8") as f:
       data = json.load(f)
-    return data if isinstance(data, list) else []
+    if not isinstance(data, list):
+      return []
+    cutoff = now_vn() - timedelta(days=30)
+    recent = []
+    for item in data:
+      try:
+        item_time = datetime.strptime(str(item.get("time", "")), "%Y-%m-%d %H:%M:%S")
+        if item_time >= cutoff:
+          recent.append(item)
+      except (AttributeError, TypeError, ValueError):
+        continue
+    if len(recent) != len(data):
+      save_login_logs(recent)
+    return recent
   except Exception:
     return []
 
 
 def save_login_logs(logs):
   try:
+    cutoff = now_vn() - timedelta(days=30)
+    recent = []
+    for item in logs:
+      try:
+        item_time = datetime.strptime(str(item.get("time", "")), "%Y-%m-%d %H:%M:%S")
+        if item_time >= cutoff:
+          recent.append(item)
+      except (AttributeError, TypeError, ValueError):
+        continue
     with open(LOGIN_LOG_FILE, "w", encoding="utf-8") as f:
-      json.dump(logs[-2000:], f, ensure_ascii=False, indent=2)
+      json.dump(recent[-2000:], f, ensure_ascii=False, indent=2)
   except Exception:
     pass
 
@@ -1651,10 +1673,16 @@ ADMIN_HTML = """
 body {font-family: Arial, sans-serif; background:#f6f6f6; margin:0; padding:0; font-size:14px;}
 .container {max-width:1100px; margin:16px auto; background:white; padding:16px; border-radius:12px; box-shadow:0 0 10px #aaa;}
 .admin-topbar {background:#a9002b; margin:-16px -16px 16px; padding:16px; justify-content:center; border-radius:12px 12px 0 0;}
-.admin-topbar h2 {text-transform:uppercase; text-align:center; flex:1; color:#ffffff;}
+.admin-topbar h2 {text-transform:uppercase; text-align:center; flex:1; color:#ffffff; font-family:"Segoe UI", Arial, sans-serif; letter-spacing:.35px;}
 h2 {margin-top:0; font-size:18px;}
 .summary {display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 14px;}
-.summary div {background:#f5f5f5; padding:8px 10px; border-radius:8px; min-width:100px; flex:1 1 100px; font-size:12.5px; line-height:1.5;}
+.summary div {background:#f8faf9; border:1px solid #e1e9e4; padding:10px 12px; border-radius:9px; min-width:100px; flex:1 1 100px; font-size:12.5px; line-height:1.5; cursor:pointer; transition:transform .15s, box-shadow .15s;}
+.summary div:hover {transform:translateY(-1px); box-shadow:0 3px 10px rgba(38,78,57,.12);}
+.summary div.pending-card {background:#fffaf0; border-color:#f1dfb5; color:#8a6100;}
+.summary div.approved-card {background:#f1faf4; border-color:#c9e8d2; color:#236b3b;}
+.summary div.rejected-card {background:#fff5f5; border-color:#f0cccc; color:#a33b3b;}
+.summary div.total-card {background:#f5f7fb; border-color:#dbe2ee; color:#40516e;}
+.summary div.online-card {background:#eefaf7; border-color:#c7e8df; color:#176b5a;}
 .summary div strong {font-size:13px;}
 .table-scroll {width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch;}
 table {width:100%; min-width:720px; border-collapse:collapse; margin-top:12px;}
@@ -1662,7 +1690,8 @@ th, td {padding:6px 7px; border:1px solid #ddd; text-align:left; font-size:12.5p
 th {font-size:12.5px; white-space:nowrap; text-align:center; background:#faf5f5;}
 button {padding:6px 9px; border:none; border-radius:6px; cursor:pointer; color:white; font-size:12.5px; white-space:nowrap;}
 .approve {background:#2e7d32;}
-.reject {background:#c62828;}
+.reject {background:#f0ad1d;}
+.reject:hover {background:#d89400;}
 input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 .bulk-bar {margin:12px 0; padding:8px; background:#f8f8f8; border-radius:8px; display:flex; gap:6px; flex-wrap:wrap; align-items:center;}
 .excel-box {margin:12px 0; padding:12px; background:#eef6fc; border:1px solid #b6d4fe; border-radius:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:space-between; font-size:12.5px;}
@@ -1673,6 +1702,9 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 .search-bar {margin:12px 0 4px; display:flex; gap:8px; align-items:center; flex-wrap:wrap;}
 .search-bar input[type="search"] {flex:1; min-width:200px; padding:7px 9px; border:1px solid #ccc; border-radius:8px; font-size:13px;}
 .search-bar input[type="search"]:focus {outline:none; border-color:#7a0026; box-shadow:0 0 0 3px rgba(122,0,38,.12);}
+.status-filters {display:flex; gap:10px; flex-wrap:wrap; align-items:center; margin:5px 0 10px; color:#555; font-size:12.5px;}
+.status-filters label {display:inline-flex; align-items:center; gap:4px; margin:0; font-weight:600; cursor:pointer;}
+.status-filters input {accent-color:#7a0026;}
 .search-count {font-size:12px; color:#666; white-space:nowrap;}
 .pagination-bar {display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin:8px 0 4px; font-size:12.5px; color:#444;}
 .pagination-footer {margin:16px -16px -16px; padding:12px 16px; background:#fff0f2; border-top:1px solid #f1c1c9; border-radius:0 0 12px 12px; color:#7a0026;}
@@ -1733,8 +1765,8 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 .alert-msg {padding:8px 12px; border-radius:8px; font-weight:700; margin:8px 0; font-size:13px;}
 .alert-success {background:#e8f5e9; color:#2e7d32; border:1px solid #a5d6a7;}
 .alert-error {background:#ffebee; color:#c62828; border:1px solid #ef9a9a;}
-.row-action-btn {background:#455a64; padding:6px 9px; font-size:12px; white-space:nowrap;}
-.row-action-btn:hover {background:#37474f;}
+.row-action-btn {background:#a9002b; padding:6px 9px; font-size:12px; white-space:nowrap;}
+.row-action-btn:hover {background:#7a0026;}
 .row-action-menu {
   position:fixed; min-width:170px;
   background:#fff; border-radius:10px; box-shadow:0 10px 28px rgba(0,0,0,.22);
@@ -1771,10 +1803,11 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 {% if error %}<div class="alert-msg alert-error">{{ error }}</div>{% endif %}
 
 <div class="summary">
-<div><strong>Chờ duyệt</strong><br>{{ stats.pending }}</div>
-<div><strong>Đã duyệt</strong><br>{{ stats.approved }}</div>
-<div><strong>Từ chối</strong><br>{{ stats.rejected }}</div>
-<div><strong>Tổng</strong><br>{{ stats.total }}</div>
+<div class="pending-card" role="button" tabindex="0" onclick="setStatusFilter('pending')"><strong>Chờ duyệt</strong><br>{{ stats.pending }}</div>
+<div class="approved-card" role="button" tabindex="0" onclick="setStatusFilter('approved')"><strong>Đã duyệt</strong><br>{{ stats.approved }}</div>
+<div class="rejected-card" role="button" tabindex="0" onclick="setStatusFilter('rejected')"><strong>Từ chối</strong><br>{{ stats.rejected }}</div>
+<div class="total-card" role="button" tabindex="0" onclick="clearStatusFilters()"><strong>Tổng</strong><br>{{ stats.total }}</div>
+<div class="online-card" role="button" tabindex="0" onclick="setOnlineFilter(true)"><strong>Đang online</strong><br>{{ stats.online }}</div>
 </div>
 
 <div class="excel-box">
@@ -1793,11 +1826,18 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <div id="bulkSelectedEmails"></div>
 <button class="approve" type="button" onclick="submitBulkAction('approve')">Duyệt theo lô</button>
 <button class="reject" type="button" onclick="submitBulkAction('reject')">Từ chối theo lô</button>
-<button type="button" style="background:#616161;" onclick="submitBulkAction('delete')">🗑️ Xóa theo lô</button>
+<button type="button" style="background:#c62828;" onclick="submitBulkAction('delete')">🗑️ Xóa theo lô</button>
 </form>
 <div class="search-bar">
 <input type="search" id="adminSearchInput" placeholder="🔍 Tìm theo email..." oninput="onSearchInput()" autocomplete="off">
 <span id="searchResultCount" class="search-count"></span>
+</div>
+<div class="status-filters" aria-label="Lọc tài khoản">
+  <span>Lọc trạng thái:</span>
+  <label><input type="checkbox" value="pending" onchange="onFilterChange()"> Chờ duyệt</label>
+  <label><input type="checkbox" value="approved" onchange="onFilterChange()"> Đã duyệt</label>
+  <label><input type="checkbox" value="rejected" onchange="onFilterChange()"> Từ chối</label>
+  <label><input type="checkbox" value="online" onchange="onFilterChange()"> Đang online</label>
 </div>
 <div class="pagination-bar">
   <div>
@@ -1819,7 +1859,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <table id="adminTable">
 <tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Ngày đăng ký</th><th>Lần đăng nhập gần nhất</th><th>Tác vụ</th></tr>
 {% for row in rows %}
-<tr data-email="{{ row.email }}" data-password="{{ row.raw_password }}" class="row-{{ row.status|lower }}{{ ' row-locked' if row.locked else '' }}">
+<tr data-email="{{ row.email }}" data-password="{{ row.raw_password }}" data-status="{{ row.status|lower }}" data-online="{{ '1' if is_online(row.email) else '0' }}" class="row-{{ row.status|lower }}{{ ' row-locked' if row.locked else '' }}">
 <td><input type="checkbox" class="rowCheck" name="selected_emails" value="{{ row.email }}"></td>
 <td>
   {% if is_online(row.email) %}
@@ -1930,8 +1970,14 @@ function getAllAdminRows(){
 
 function getMatchingAdminRows(){
   const term = document.getElementById('adminSearchInput').value.trim().toLowerCase();
+  const filters = Array.from(document.querySelectorAll('.status-filters input:checked')).map(input => input.value);
   const all = getAllAdminRows();
-  return term ? all.filter(tr => (tr.getAttribute('data-email') || '').toLowerCase().includes(term)) : all;
+  return all.filter(tr => {
+    const emailMatches = !term || (tr.getAttribute('data-email') || '').toLowerCase().includes(term);
+    const status = tr.getAttribute('data-status') || '';
+    const statusMatches = !filters.length || filters.includes(status) || (filters.includes('online') && tr.getAttribute('data-online') === '1');
+    return emailMatches && statusMatches;
+  });
 }
 
 function updateAdminTable(){
@@ -1952,7 +1998,8 @@ function updateAdminTable(){
   });
 
   const countEl = document.getElementById('searchResultCount');
-  countEl.textContent = term ? `Tìm thấy ${matching.length} / ${all.length} tài khoản` : '';
+  const hasFilters = document.querySelectorAll('.status-filters input:checked').length > 0;
+  countEl.textContent = term || hasFilters ? `Tìm thấy ${matching.length} / ${all.length} tài khoản` : '';
 
   const shownFrom = matching.length === 0 ? 0 : startIdx + 1;
   const shownTo = Math.min(endIdx, matching.length);
@@ -1969,6 +2016,29 @@ function updateAdminTable(){
 }
 
 function onSearchInput(){
+  currentPage = 1;
+  updateAdminTable();
+}
+
+function onFilterChange(){
+  currentPage = 1;
+  updateAdminTable();
+}
+
+function setStatusFilter(status){
+  document.querySelectorAll('.status-filters input').forEach(input => input.checked = input.value === status);
+  currentPage = 1;
+  updateAdminTable();
+}
+
+function setOnlineFilter(enabled){
+  document.querySelectorAll('.status-filters input').forEach(input => input.checked = enabled && input.value === 'online');
+  currentPage = 1;
+  updateAdminTable();
+}
+
+function clearStatusFilters(){
+  document.querySelectorAll('.status-filters input').forEach(input => input.checked = false);
   currentPage = 1;
   updateAdminTable();
 }
@@ -2154,7 +2224,8 @@ def admin():
         "pending": int((df["status"].astype(str).str.lower() == "pending").sum()),
         "approved": int((df["status"].astype(str).str.lower() == "approved").sum()),
         "rejected": int((df["status"].astype(str).str.lower() == "rejected").sum()),
-        "total": len(df)
+      "total": len(df),
+      "online": sum(1 for email in df["email"].astype(str) if is_user_online(email))
     }
   return render_template_string(
     ADMIN_HTML,
@@ -2175,9 +2246,10 @@ def is_admin_request():
 
 LOGIN_LOGS_HTML = """
 <!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Log đăng nhập</title><style>body{font-family:Arial;background:#f6f6f6;margin:0;padding:16px}.box{max-width:900px;margin:auto;background:#fff;padding:16px;border-radius:12px}.head{background:#f6c4cc;margin:-16px -16px 16px;padding:16px;text-align:center;color:#7a0026;font-weight:800}table{width:100%;border-collapse:collapse}th,td{padding:8px;border:1px solid #ddd;text-align:left;font-size:13px}th{background:#fff0f2}.ok{color:#2e7d32}.fail{color:#c62828}.back{display:inline-block;margin-top:14px;color:#7a0026}</style></head>
+<title>Log đăng nhập</title><style>*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#fff 0%,#f5eff0 100%);margin:0;padding:16px;color:#2c2c2c}.box{max-width:900px;margin:auto;background:#fff;padding:16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.1)}.head{background:#a9002b;margin:-16px -16px 16px;padding:16px;text-align:center;color:#fff;font-family:"Segoe UI",Arial,sans-serif;font-weight:800;font-size:18px;letter-spacing:.35px;border-radius:12px 12px 0 0}.note{font-size:13px;color:#666;margin:0 0 10px}table{width:100%;border-collapse:collapse}th,td{padding:8px;border:1px solid #ddd;text-align:left;font-size:13px}th{background:#fff0f2}.ok{color:#2e7d32}.fail{color:#c62828}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}.back{color:#7a0026}.delete{border:0;border-radius:7px;padding:8px 11px;background:#c62828;color:#fff;font-weight:700;cursor:pointer}</style></head>
 <body><div class="box"><div class="head">LOG ĐĂNG NHẬP HỆ THỐNG</div><table><tr><th>Email</th><th>Thời gian</th><th>Địa chỉ IP</th><th>Kết quả</th></tr>
-{% for item in logs|reverse %}<tr><td>{{ item.email }}</td><td>{{ format_date(item.time) }}</td><td>{{ item.ip }}</td><td class="{{ 'ok' if item.success else 'fail' }}">{{ 'Thành công' if item.success else 'Thất bại' }}</td></tr>{% else %}<tr><td colspan="4">Chưa có log đăng nhập.</td></tr>{% endfor %}</table><a class="back" href="/admin?pwd={{ pwd }}">← Quay lại quản trị</a></div></body></html>
+<p class="note">Chỉ lưu log trong 30 ngày gần nhất.</p><table><tr><th>Email</th><th>Thời gian</th><th>Địa chỉ IP</th><th>Kết quả</th></tr>
+{% for item in logs|reverse %}<tr><td>{{ item.email }}</td><td>{{ format_date(item.time) }}</td><td>{{ item.ip }}</td><td class="{{ 'ok' if item.success else 'fail' }}">{{ 'Thành công' if item.success else 'Thất bại' }}</td></tr>{% else %}<tr><td colspan="4">Chưa có log đăng nhập.</td></tr>{% endfor %}</table><div class="actions"><a class="back" href="/admin?pwd={{ pwd }}">← Quay lại quản trị</a><form method="post" action="/admin/login_logs/delete"><input type="hidden" name="pwd" value="{{ pwd }}"><button class="delete" type="submit" onclick="return confirm('Xóa toàn bộ log đăng nhập trong 30 ngày?')">Xóa log</button></form></div></div></body></html>
 """
 
 
@@ -2186,6 +2258,14 @@ def admin_login_logs():
   if not is_admin_request():
     return redirect("/admin")
   return render_template_string(LOGIN_LOGS_HTML, logs=load_login_logs(), format_date=format_date_display, pwd=ADMIN_PASSWORD)
+
+
+@app.route("/admin/login_logs/delete", methods=["POST"])
+def admin_delete_login_logs():
+  if not (is_admin_request() or request.form.get("pwd", "") == ADMIN_PASSWORD):
+    return redirect("/admin")
+  save_login_logs([])
+  return redirect(f"/admin/login_logs?pwd={ADMIN_PASSWORD}")
 
 
 @app.route('/admin/logout')
