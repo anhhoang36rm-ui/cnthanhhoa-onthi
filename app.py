@@ -1833,7 +1833,6 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <span id="searchResultCount" class="search-count"></span>
 </div>
 <div class="status-filters" aria-label="Lọc tài khoản">
-  <span>Lọc trạng thái:</span>
   <label><input type="checkbox" value="pending" onchange="onFilterChange()"> Chờ duyệt</label>
   <label><input type="checkbox" value="approved" onchange="onFilterChange()"> Đã duyệt</label>
   <label><input type="checkbox" value="rejected" onchange="onFilterChange()"> Từ chối</label>
