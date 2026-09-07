@@ -22,8 +22,8 @@ app = Flask(__name__)
 app.secret_key = os.getenv("FLASK_SECRET_KEY") or os.urandom(32)
 
 if os.getenv("TRUST_PROXY", "0") == "1":
-    from werkzeug.middleware.proxy_fix import ProxyFix
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+  from werkzeug.middleware.proxy_fix import ProxyFix
+  app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
 
 
 def _cookie_is_secure():
@@ -1157,14 +1157,26 @@ function stopTimer(){
 
 function showQuestion(i){
     const q = quizData[i];
-    quizContainer.innerHTML = `<div class="question"><strong>Câu ${i+1}/${quizData.length}:</strong> ${q.question}</div>`;
+  quizContainer.innerHTML = "";
+  const questionElement = document.createElement("div");
+  questionElement.className = "question";
+  const questionLabel = document.createElement("strong");
+  questionLabel.textContent = `Câu ${i+1}/${quizData.length}: `;
+  questionElement.appendChild(questionLabel);
+  questionElement.appendChild(document.createTextNode(q.question));
+  quizContainer.appendChild(questionElement);
     q.options.forEach(opt=>{
         const label=document.createElement("label");
         label.className="option";
-        label.innerHTML=`<input type="radio" name="q${i}" value="${opt}"> ${opt}`;
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = `q${i}`;
+    input.value = opt;
+    label.appendChild(input);
+    label.appendChild(document.createTextNode(` ${opt}`));
         quizContainer.appendChild(label);
-        label.querySelector("input").addEventListener("change", ()=>{
-            const selected = label.querySelector("input");
+    input.addEventListener("change", ()=>{
+      const selected = input;
             quizContainer.querySelectorAll("input[type=radio]").forEach(r=>r.disabled=true);
             answeredCount++;
             const isCorrect = selected.value === q.correctAnswer;
@@ -2246,7 +2258,7 @@ def is_admin_request():
 LOGIN_LOGS_HTML = """
 <!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Log đăng nhập</title><style>*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#fff 0%,#f5eff0 100%);margin:0;padding:16px;color:#2c2c2c}.box{max-width:900px;margin:auto;background:#fff;padding:16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.1)}.head{background:#a9002b;margin:-16px -16px 16px;padding:16px;text-align:center;color:#fff;font-family:"Segoe UI",Arial,sans-serif;font-weight:800;font-size:18px;letter-spacing:.35px;border-radius:12px 12px 0 0}.note{font-size:13px;color:#666;margin:0 0 10px}table{width:100%;border-collapse:collapse}th,td{padding:8px;border:1px solid #ddd;text-align:left;font-size:13px}th{background:#fff0f2}.ok{color:#2e7d32}.fail{color:#c62828}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}.back{color:#7a0026}.delete{border:0;border-radius:7px;padding:8px 11px;background:#c62828;color:#fff;font-weight:700;cursor:pointer}</style></head>
-<body><div class="box"><div class="head">LOG ĐĂNG NHẬP HỆ THỐNG</div><table><tr><th>Email</th><th>Thời gian</th><th>Địa chỉ IP</th><th>Kết quả</th></tr>
+<body><div class="box"><div class="head">LOG ĐĂNG NHẬP HỆ THỐNG</div>
 <p class="note">Chỉ lưu log trong 30 ngày gần nhất.</p><table><tr><th>Email</th><th>Thời gian</th><th>Địa chỉ IP</th><th>Kết quả</th></tr>
 {% for item in logs|reverse %}<tr><td>{{ item.email }}</td><td>{{ format_date(item.time) }}</td><td>{{ item.ip }}</td><td class="{{ 'ok' if item.success else 'fail' }}">{{ 'Thành công' if item.success else 'Thất bại' }}</td></tr>{% else %}<tr><td colspan="4">Chưa có log đăng nhập.</td></tr>{% endfor %}</table><div class="actions"><a class="back" href="/admin?pwd={{ pwd }}">← Quay lại quản trị</a><form method="post" action="/admin/login_logs/delete"><input type="hidden" name="pwd" value="{{ pwd }}"><button class="delete" type="submit" onclick="return confirm('Xóa toàn bộ log đăng nhập trong 30 ngày?')">Xóa log</button></form></div></div></body></html>
 """
