@@ -1448,7 +1448,7 @@ function exportExcel(){
     });
     table += "</table>";
     const html = `<html><head><meta charset="UTF-8"></head><body>${table}</body></html>`;
-    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "_" : "") + "ket_qua_thi.xls";
+    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "-" : "") + "ket_qua_thi.xls";
     downloadBlob(html, "application/vnd.ms-excel", fname);
 }
 
