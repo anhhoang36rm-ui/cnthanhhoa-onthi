@@ -1392,7 +1392,7 @@ function reviewToHtml(){
         const statusCls = !item.answered ? "none" : (item.isCorrect ? "ok" : "bad");
         const statusText = !item.answered ? "Chưa trả lời" : (item.isCorrect ? "Đúng" : "Sai");
         rows += `<div class="review-item">
-            <div class="review-q">Câu ${item.index+1}: ${escapeHtml(item.question)} — <span class="review-status ${statusCls}">${statusText}</span></div>
+            <div class="review-q">Câu ${item.index+1}: ${escapeHtml(item.question)} - <span class="review-status ${statusCls}">${statusText}</span></div>
             ${optionsHtml}
         </div>`;
     });
