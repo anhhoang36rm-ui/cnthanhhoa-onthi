@@ -1360,7 +1360,7 @@ function finishQuiz(mode){
     if(mode === "timeout") title = "Đã hết thời gian làm bài!";
     if(mode === "early") title = "Bạn đã kết thúc bài thi giữa chừng.";
 
-    let html = `<h3>${title}</h3><p>Kết quả: đúng <strong>${correctCount}/${quizData.length}</strong> câu - <strong>Tỉ lệ đúng: ${percent}%</strong></p>`;
+    let html = `<h3>${title}</h3><p>Kết quả: đúng <strong>${correctCount}/${quizData.length}</strong> câu — <strong>Tỉ lệ đúng: ${percent}%</strong></p>`;
     if(currentUserEmail){
         html += `<p style="color:#7a0026; font-weight:700; font-size:14px;">👤 Tài khoản: ${escapeHtml(currentUserEmail)}</p>`;
     }
@@ -1448,7 +1448,7 @@ function exportExcel(){
     });
     table += "</table>";
     const html = `<html><head><meta charset="UTF-8"></head><body>${table}</body></html>`;
-    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "-" : "") + "ket_qua_thi.xls";
+    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "_" : "") + "ket_qua_thi.xls";
     downloadBlob(html, "application/vnd.ms-excel", fname);
 }
 
@@ -1458,7 +1458,7 @@ function exportWord(){
     const accountLine = currentUserEmail ? `<p><strong>Tài khoản:</strong> ${escapeHtml(currentUserEmail)}</p>` : "";
     const summaryText = `${accountLine}<p><strong>Tổng số câu:</strong> ${s.total} &nbsp;|&nbsp; <strong>Đúng:</strong> ${s.correct} &nbsp;|&nbsp; <strong>Sai:</strong> ${s.wrong} &nbsp;|&nbsp; <strong>Chưa trả lời:</strong> ${s.unanswered} &nbsp;|&nbsp; <strong>Tỉ lệ đúng:</strong> ${s.percent}%</p><p><strong>Bắt đầu:</strong> ${formatDateTime(examStartTime)} &nbsp;|&nbsp; <strong>Kết thúc:</strong> ${formatDateTime(examEndTime)} &nbsp;|&nbsp; <strong>Tổng thời gian:</strong> ${formatDuration(durationMs)}</p>`;
     const html = `<html><head><meta charset="UTF-8"></head><body><h2>Kết quả bài thi</h2>${summaryText}${reviewToHtml().replace(/class="[^"]*"/g,"")}</body></html>`;
-    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "-" : "") + "ket_qua_thi.doc";
+    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "_" : "") + "ket_qua_thi.doc";
     downloadBlob(html, "application/msword", fname);
 }
 
@@ -2348,10 +2348,16 @@ def is_admin_request():
 
 LOGIN_LOGS_HTML = """
 <!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Log đăng nhập</title><style>*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#fff 0%,#f5eff0 100%);margin:0;padding:16px;color:#2c2c2c}.box{max-width:900px;margin:auto;background:#fff;padding:16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.1)}.head{background:#a9002b;margin:-16px -16px 16px;padding:16px;text-align:center;color:#fff;font-family:"Segoe UI",Arial,sans-serif;font-weight:800;font-size:18px;letter-spacing:.35px;border-radius:12px 12px 0 0}.note{font-size:13px;color:#666;margin:0 0 10px}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{padding:8px;border:1px solid #ddd;text-align:left;font-size:13px;overflow:hidden;text-overflow:ellipsis}th{background:#fff0f2;text-align:center;white-space:nowrap}td.center{text-align:center;white-space:nowrap}.ok{color:#2e7d32}.fail{color:#c62828}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}.back{color:#7a0026}.delete{border:0;border-radius:7px;padding:8px 11px;background:#c62828;color:#fff;font-weight:700;cursor:pointer}</style></head>
+<title>Log đăng nhập</title><style>*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#fff 0%,#f5eff0 100%);margin:0;padding:16px;color:#2c2c2c}.box{max-width:900px;margin:auto;background:#fff;padding:16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.1)}.head{background:#a9002b;margin:-16px -16px 16px;padding:16px;text-align:center;color:#fff;font-family:"Segoe UI",Arial,sans-serif;font-weight:800;font-size:18px;letter-spacing:.35px;border-radius:12px 12px 0 0}.note{font-size:13px;color:#666;margin:0 0 10px}.table-scroll{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}table{width:100%;min-width:520px;border-collapse:collapse;table-layout:fixed}th,td{padding:8px;border:1px solid #ddd;text-align:left;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}th{background:#fff0f2;text-align:center}td.center{text-align:center}.col-email{width:180px;}.col-time{width:130px;}.col-ip{width:110px;}.col-result{width:90px;}.ok{color:#2e7d32}.fail{color:#c62828}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}.back{color:#7a0026}.delete{border:0;border-radius:7px;padding:8px 11px;background:#c62828;color:#fff;font-weight:700;cursor:pointer}
+@media (max-width:480px){table{min-width:440px}.col-email{width:140px;}.col-time{width:110px;}.col-ip{width:100px;}.col-result{width:80px;}th,td{font-size:12px;padding:6px;}}
+</style></head>
 <body><div class="box"><div class="head">LOG ĐĂNG NHẬP HỆ THỐNG</div>
-<p class="note">Chỉ lưu log trong 30 ngày gần nhất.</p><table><tr><th>Email</th><th style="width:150px;">Thời gian</th><th style="width:120px;">Địa chỉ IP</th><th style="width:100px;">Kết quả</th></tr>
-{% for item in logs|reverse %}<tr><td>{{ item.email }}</td><td class="center">{{ format_date(item.time) }}</td><td class="center">{{ item.ip }}</td><td class="center {{ 'ok' if item.success else 'fail' }}">{{ 'Thành công' if item.success else 'Thất bại' }}</td></tr>{% else %}<tr><td colspan="4" style="text-align:center; color:#888;">Chưa có log đăng nhập.</td></tr>{% endfor %}</table><div class="actions"><a class="back" href="/admin?pwd={{ pwd }}">← Quay lại quản trị</a><form method="post" action="/admin/login_logs/delete"><input type="hidden" name="pwd" value="{{ pwd }}"><button class="delete" type="submit" onclick="return confirm('Xóa toàn bộ log đăng nhập trong 30 ngày?')">Xóa log</button></form></div></div></body></html>
+<p class="note">Chỉ lưu log trong 30 ngày gần nhất. Vuốt ngang bảng để xem đủ các cột.</p>
+<div class="table-scroll">
+<table><tr><th class="col-email">Email</th><th class="col-time">Thời gian</th><th class="col-ip">Địa chỉ IP</th><th class="col-result">Kết quả</th></tr>
+{% for item in logs|reverse %}<tr><td class="col-email">{{ item.email }}</td><td class="center col-time">{{ format_date(item.time) }}</td><td class="center col-ip">{{ item.ip }}</td><td class="center col-result {{ 'ok' if item.success else 'fail' }}">{{ 'Thành công' if item.success else 'Thất bại' }}</td></tr>{% else %}<tr><td colspan="4" style="text-align:center; color:#888;">Chưa có log đăng nhập.</td></tr>{% endfor %}</table>
+</div>
+<div class="actions"><a class="back" href="/admin?pwd={{ pwd }}">← Quay lại quản trị</a><form method="post" action="/admin/login_logs/delete"><input type="hidden" name="pwd" value="{{ pwd }}"><button class="delete" type="submit" onclick="return confirm('Xóa toàn bộ log đăng nhập trong 30 ngày?')">Xóa log</button></form></div></div></body></html>
 """
 
 
