@@ -444,13 +444,12 @@ body {
 .top-bar img {
   width:56px;
   height:56px;
-  border-radius:16px;
+  border-radius:12px;
   background:transparent;
-  border:2px solid #fff;
-  box-sizing:border-box;
   display:block;
   margin:0 auto 10px;
   padding:0;
+  object-fit:contain;
 }
 .top-bar h1 {
   margin:0;
