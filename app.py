@@ -16,6 +16,14 @@ import time
 import re
 import io
 import urllib.parse
+import threading
+import tempfile
+from contextlib import contextmanager
+try:
+    import fcntl
+    HAS_FCNTL = True
+except ImportError:
+    HAS_FCNTL = False
 
 
 app = Flask(__name__)
@@ -83,6 +91,62 @@ os.makedirs(DATA_DIR, exist_ok=True)
 DEVICES_FILE = os.path.join(DATA_DIR, "devices.json")
 LOGIN_LOG_FILE = os.path.join(DATA_DIR, "login_logs.json")
 
+
+def _make_file_lock(path):
+    """Tạo khóa cho 1 file dữ liệu: kết hợp threading.Lock (chống đụng độ giữa các luồng
+    trong CÙNG tiến trình - quan trọng vì Flask chạy threaded=True) và khóa file bằng fcntl
+    (chống đụng độ giữa CÁC tiến trình khác nhau, vd nhiều gunicorn worker). Phải bọc toàn bộ
+    chuỗi "đọc -> sửa -> ghi" trong khối `with lock():` thì mới thực sự chống mất dữ liệu khi
+    nhiều người đăng ký/đăng nhập cùng lúc - chỉ khóa lúc ghi thôi là chưa đủ vì có thể xảy ra
+    2 người cùng đọc dữ liệu cũ, cùng sửa, rồi người ghi sau đè mất thay đổi của người ghi trước."""
+    thread_lock = threading.Lock()
+    lock_path = path + ".lock"
+
+    @contextmanager
+    def _lock():
+        thread_lock.acquire()
+        fh = None
+        try:
+            if HAS_FCNTL:
+                fh = open(lock_path, "a+")
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            if fh is not None:
+                try:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+                except Exception:
+                    pass
+                fh.close()
+            thread_lock.release()
+
+    return _lock
+
+
+devices_lock = _make_file_lock(DEVICES_FILE)
+login_log_lock = _make_file_lock(LOGIN_LOG_FILE)
+
+
+def _atomic_write_json(path, data):
+    """Ghi file JSON một cách AN TOÀN: ghi ra file tạm trong cùng thư mục rồi đổi tên
+    (os.replace) đè lên file đích. Thao tác đổi tên trên cùng hệ thống file là NGUYÊN TỬ
+    (atomic) ở cấp hệ điều hành, nên bất kỳ tiến trình nào khác đang ĐỌC file (vd trang /quiz
+    kiểm tra phiên đăng nhập) sẽ luôn thấy file cũ nguyên vẹn hoặc file mới nguyên vẹn,
+    KHÔNG BAO GIỜ thấy file bị ghi dở/hỏng (điều có thể xảy ra nếu ghi trực tiếp đè lên file
+    gốc). Quan trọng khi có hàng trăm/nghìn người dùng đọc-ghi đồng thời."""
+    directory = os.path.dirname(path) or "."
+    fd, tmp_path = tempfile.mkstemp(prefix=".tmp_", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, path)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -145,7 +209,7 @@ ADMIN_PASSWORD = load_admin_password()
 
 LOGIN_ATTEMPTS = {}
 LOGIN_MAX_ATTEMPTS = 5
-LOGIN_WINDOW_SECONDS = 600
+LOGIN_WINDOW_SECONDS = 120  # khóa 2 phút sau 5 lần nhập sai
 
 
 def is_login_rate_limited(key):
@@ -153,6 +217,17 @@ def is_login_rate_limited(key):
     attempts = [t for t in LOGIN_ATTEMPTS.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
     LOGIN_ATTEMPTS[key] = attempts
     return len(attempts) >= LOGIN_MAX_ATTEMPTS
+
+
+def get_login_lockout_remaining_seconds(key):
+    """Số giây còn lại phải chờ trước khi được thử đăng nhập lại (0 nếu chưa/không còn bị khóa)."""
+    now = time.time()
+    attempts = sorted(t for t in LOGIN_ATTEMPTS.get(key, []) if now - t < LOGIN_WINDOW_SECONDS)
+    if len(attempts) < LOGIN_MAX_ATTEMPTS:
+        return 0
+    oldest_relevant = attempts[-LOGIN_MAX_ATTEMPTS]
+    remaining = LOGIN_WINDOW_SECONDS - (now - oldest_relevant)
+    return max(0, int(remaining) + 1)
 
 
 def record_failed_login(key):
@@ -164,6 +239,7 @@ def clear_failed_login(key):
 
 
 USED_QUESTIONS_FILE = os.path.join(DATA_DIR, "used_questions.json")
+used_questions_lock = _make_file_lock(USED_QUESTIONS_FILE)
 
 
 def load_used_questions():
@@ -221,8 +297,8 @@ def save_used_questions():
             email: {fname: sorted(list(ids)) for fname, ids in files.items()}
             for email, files in SESSION_USED_QUESTIONS.items()
         }
-        with open(USED_QUESTIONS_FILE, "w", encoding="utf-8") as f:
-            json.dump(serializable, f, ensure_ascii=False, indent=2)
+        with used_questions_lock():
+            _atomic_write_json(USED_QUESTIONS_FILE, serializable)
     except Exception:
         pass
 
@@ -265,21 +341,21 @@ def save_login_logs(logs):
           recent.append(item)
       except (AttributeError, TypeError, ValueError):
         continue
-    with open(LOGIN_LOG_FILE, "w", encoding="utf-8") as f:
-      json.dump(recent[-2000:], f, ensure_ascii=False, indent=2)
+    _atomic_write_json(LOGIN_LOG_FILE, recent[-2000:])
   except Exception:
     pass
 
 
 def record_login(email, success=True):
-  logs = load_login_logs()
-  logs.append({
-    "email": str(email or "").strip().lower(),
-    "time": now_vn().strftime("%Y-%m-%d %H:%M:%S"),
-    "success": bool(success),
-    "ip": request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
-  })
-  save_login_logs(logs)
+  with login_log_lock():
+    logs = load_login_logs()
+    logs.append({
+      "email": str(email or "").strip().lower(),
+      "time": now_vn().strftime("%Y-%m-%d %H:%M:%S"),
+      "success": bool(success),
+      "ip": request.headers.get("X-Forwarded-For", request.remote_addr or "unknown").split(",")[0].strip()
+    })
+    save_login_logs(logs)
 ADMIN_LOGIN_HTML = """
 <!DOCTYPE html>
 <html lang="vi">
@@ -982,12 +1058,14 @@ let answersMap = {};
 let reviewData = [];
 let examStartTime = null;
 let examEndTime = null;
+let currentUserEmail = "";
 
 async function showHeaderUserBadge(){
     try{
         const res = await fetch("/api/whoami");
         const data = await res.json();
         if(!data.email) return;
+        currentUserEmail = data.email;
         const username = data.email.split("@")[0];
         if(!username) return;
         headerUserName.textContent = username;
@@ -1228,7 +1306,8 @@ function computeStats(){
     const correct = reviewData.filter(i=>i.isCorrect).length;
     const unanswered = reviewData.filter(i=>!i.answered).length;
     const wrong = total - correct - unanswered;
-    return {total, correct, wrong, unanswered};
+    const percent = total > 0 ? Math.round((correct / total) * 1000) / 10 : 0;
+    return {total, correct, wrong, unanswered, percent};
 }
 
 function pad2(n){ return String(n).padStart(2,"0"); }
@@ -1252,12 +1331,15 @@ function formatDuration(ms){
 function statsHtml(){
     const s = computeStats();
     const durationMs = (examStartTime && examEndTime) ? (examEndTime - examStartTime) : null;
+    const accountRow = currentUserEmail ? `<span class="time-row">👤 Tài khoản: <strong>${escapeHtml(currentUserEmail)}</strong></span>` : "";
     return `<div class="review-summary">
         <strong>Tổng số câu:</strong> ${s.total}
         &nbsp;|&nbsp; <span class="stat-ok">✔ Đúng: ${s.correct}</span>
         &nbsp;|&nbsp; <span class="stat-bad">✘ Sai: ${s.wrong}</span>
         &nbsp;|&nbsp; <span class="stat-none">– Chưa trả lời: ${s.unanswered}</span>
+        &nbsp;|&nbsp; <strong>Tỉ lệ đúng: ${s.percent}%</strong>
         <span class="time-row">🕐 Bắt đầu: <strong>${formatDateTime(examStartTime)}</strong> &nbsp;|&nbsp; Kết thúc: <strong>${formatDateTime(examEndTime)}</strong> &nbsp;|&nbsp; Tổng thời gian: <strong>${formatDuration(durationMs)}</strong></span>
+        ${accountRow}
     </div>`;
 }
 
@@ -1273,11 +1355,15 @@ function finishQuiz(mode){
     viewResultsBtn.classList.remove("hidden");
 
     const unanswered = quizData.length - answeredCount;
+    const percent = quizData.length > 0 ? Math.round((correctCount / quizData.length) * 1000) / 10 : 0;
     let title = "Hoàn thành bài thi!";
     if(mode === "timeout") title = "Đã hết thời gian làm bài!";
     if(mode === "early") title = "Bạn đã kết thúc bài thi giữa chừng.";
 
-    let html = `<h3>${title}</h3><p>Kết quả: đúng <strong>${correctCount}/${quizData.length}</strong> câu.</p>`;
+    let html = `<h3>${title}</h3><p>Kết quả: đúng <strong>${correctCount}/${quizData.length}</strong> câu — <strong>Tỉ lệ đúng: ${percent}%</strong></p>`;
+    if(currentUserEmail){
+        html += `<p style="color:#7a0026; font-weight:700; font-size:14px;">👤 Tài khoản: ${escapeHtml(currentUserEmail)}</p>`;
+    }
     if(unanswered > 0){
         html += `<p>Số câu chưa trả lời: ${unanswered}</p>`;
     }
@@ -1336,39 +1422,44 @@ function exportExcel(){
     const s = computeStats();
     const durationMs = (examStartTime && examEndTime) ? (examEndTime - examStartTime) : null;
     let table = `<table border="1" style="border-collapse:collapse;font-family:Arial;font-size:13px;margin-bottom:14px;">
+        <tr><td colspan="2" style="background:#fff5f6;font-weight:700;">Tài khoản</td><td>${escapeHtml(currentUserEmail || "")}</td></tr>
         <tr><td colspan="2" style="background:#fff5f6;font-weight:700;">Tổng số câu</td><td>${s.total}</td></tr>
         <tr><td colspan="2" style="background:#e8f5e9;font-weight:700;color:#0f6a4f;">Số câu đúng</td><td>${s.correct}</td></tr>
         <tr><td colspan="2" style="background:#ffebee;font-weight:700;color:#c62828;">Số câu sai</td><td>${s.wrong}</td></tr>
         <tr><td colspan="2" style="background:#f5f5f5;font-weight:700;color:#888;">Chưa trả lời</td><td>${s.unanswered}</td></tr>
+        <tr><td colspan="2" style="background:#fff3cd;font-weight:700;">Tỉ lệ đúng</td><td>${s.percent}%</td></tr>
         <tr><td colspan="2" style="font-weight:700;">Thời gian bắt đầu</td><td>${formatDateTime(examStartTime)}</td></tr>
         <tr><td colspan="2" style="font-weight:700;">Thời gian kết thúc</td><td>${formatDateTime(examEndTime)}</td></tr>
         <tr><td colspan="2" style="font-weight:700;">Tổng thời gian thi</td><td>${formatDuration(durationMs)}</td></tr>
     </table>
     <table border="1" style="border-collapse:collapse;font-family:Arial;font-size:13px;">
-        <tr style="background:#7a0026;color:#fff;">
+        <tr style="background:#7a0026;color:#fff;text-align:center;">
             <th>STT</th><th>Câu hỏi</th><th>Đáp án đúng</th><th>Đáp án đã chọn</th><th>Kết quả</th>
         </tr>`;
     reviewData.forEach(item=>{
         const status = !item.answered ? "Chưa trả lời" : (item.isCorrect ? "Đúng" : "Sai");
         table += `<tr>
-            <td>${item.index+1}</td>
+            <td style="text-align:center;">${item.index+1}</td>
             <td>${escapeHtml(item.question)}</td>
             <td>${escapeHtml(item.correctAnswer)}</td>
             <td>${item.answered ? escapeHtml(item.selected) : ""}</td>
-            <td>${status}</td>
+            <td style="text-align:center;">${status}</td>
         </tr>`;
     });
     table += "</table>";
     const html = `<html><head><meta charset="UTF-8"></head><body>${table}</body></html>`;
-    downloadBlob(html, "application/vnd.ms-excel", "ket_qua_thi.xls");
+    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "_" : "") + "ket_qua_thi.xls";
+    downloadBlob(html, "application/vnd.ms-excel", fname);
 }
 
 function exportWord(){
     const s = computeStats();
     const durationMs = (examStartTime && examEndTime) ? (examEndTime - examStartTime) : null;
-    const summaryText = `<p><strong>Tổng số câu:</strong> ${s.total} &nbsp;|&nbsp; <strong>Đúng:</strong> ${s.correct} &nbsp;|&nbsp; <strong>Sai:</strong> ${s.wrong} &nbsp;|&nbsp; <strong>Chưa trả lời:</strong> ${s.unanswered}</p><p><strong>Bắt đầu:</strong> ${formatDateTime(examStartTime)} &nbsp;|&nbsp; <strong>Kết thúc:</strong> ${formatDateTime(examEndTime)} &nbsp;|&nbsp; <strong>Tổng thời gian:</strong> ${formatDuration(durationMs)}</p>`;
+    const accountLine = currentUserEmail ? `<p><strong>Tài khoản:</strong> ${escapeHtml(currentUserEmail)}</p>` : "";
+    const summaryText = `${accountLine}<p><strong>Tổng số câu:</strong> ${s.total} &nbsp;|&nbsp; <strong>Đúng:</strong> ${s.correct} &nbsp;|&nbsp; <strong>Sai:</strong> ${s.wrong} &nbsp;|&nbsp; <strong>Chưa trả lời:</strong> ${s.unanswered} &nbsp;|&nbsp; <strong>Tỉ lệ đúng:</strong> ${s.percent}%</p><p><strong>Bắt đầu:</strong> ${formatDateTime(examStartTime)} &nbsp;|&nbsp; <strong>Kết thúc:</strong> ${formatDateTime(examEndTime)} &nbsp;|&nbsp; <strong>Tổng thời gian:</strong> ${formatDuration(durationMs)}</p>`;
     const html = `<html><head><meta charset="UTF-8"></head><body><h2>Kết quả bài thi</h2>${summaryText}${reviewToHtml().replace(/class="[^"]*"/g,"")}</body></html>`;
-    downloadBlob(html, "application/msword", "ket_qua_thi.doc");
+    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "_" : "") + "ket_qua_thi.doc";
+    downloadBlob(html, "application/msword", fname);
 }
 
 function printResults(){
@@ -1871,7 +1962,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <tr><th><input type="checkbox" id="checkAll"></th><th>Email</th><th>Trạng thái</th><th>Hạn sử dụng</th><th>Ngày đăng ký</th><th>Lần đăng nhập gần nhất</th><th>Tác vụ</th></tr>
 {% for row in rows %}
 <tr data-email="{{ row.email }}" data-password="{{ row.raw_password }}" data-status="{{ row.status|lower }}" data-online="{{ '1' if is_online(row.email) else '0' }}" class="row-{{ row.status|lower }}{{ ' row-locked' if row.locked else '' }}">
-<td><input type="checkbox" class="rowCheck" name="selected_emails" value="{{ row.email }}"></td>
+<td style="text-align:center;"><input type="checkbox" class="rowCheck" name="selected_emails" value="{{ row.email }}"></td>
 <td>
   {% if is_online(row.email) %}
     <span class="online-dot online" title="Đang online (đang mở trang thi)"></span>
@@ -1915,9 +2006,9 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
     <button type="submit" name="expiry_action" value="clear" style="background:#616161;" onclick="return confirm('Bỏ giới hạn (cho phép dùng không thời hạn)?')">Bỏ hạn</button>
   </form>
 </td>
-<td style="white-space:nowrap;">{{ format_date(row.created_at) }}</td>
-<td style="white-space:nowrap;">{{ format_date(row.last_login_at) if row.last_login_at else 'Chưa đăng nhập' }}</td>
-<td>
+<td style="white-space:nowrap; text-align:center;">{{ format_date(row.created_at) }}</td>
+<td style="white-space:nowrap; text-align:center;">{{ format_date(row.last_login_at) if row.last_login_at else 'Chưa đăng nhập' }}</td>
+<td style="text-align:center;">
 <button type="button" class="row-action-btn" data-email="{{ row.email }}" data-status="{{ row.status }}" onclick="toggleRowMenu(event, this)">🛠️ Tác vụ</button>
 </td>
 </tr>
@@ -2257,10 +2348,10 @@ def is_admin_request():
 
 LOGIN_LOGS_HTML = """
 <!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Log đăng nhập</title><style>*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#fff 0%,#f5eff0 100%);margin:0;padding:16px;color:#2c2c2c}.box{max-width:900px;margin:auto;background:#fff;padding:16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.1)}.head{background:#a9002b;margin:-16px -16px 16px;padding:16px;text-align:center;color:#fff;font-family:"Segoe UI",Arial,sans-serif;font-weight:800;font-size:18px;letter-spacing:.35px;border-radius:12px 12px 0 0}.note{font-size:13px;color:#666;margin:0 0 10px}table{width:100%;border-collapse:collapse}th,td{padding:8px;border:1px solid #ddd;text-align:left;font-size:13px}th{background:#fff0f2}.ok{color:#2e7d32}.fail{color:#c62828}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}.back{color:#7a0026}.delete{border:0;border-radius:7px;padding:8px 11px;background:#c62828;color:#fff;font-weight:700;cursor:pointer}</style></head>
+<title>Log đăng nhập</title><style>*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#fff 0%,#f5eff0 100%);margin:0;padding:16px;color:#2c2c2c}.box{max-width:900px;margin:auto;background:#fff;padding:16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.1)}.head{background:#a9002b;margin:-16px -16px 16px;padding:16px;text-align:center;color:#fff;font-family:"Segoe UI",Arial,sans-serif;font-weight:800;font-size:18px;letter-spacing:.35px;border-radius:12px 12px 0 0}.note{font-size:13px;color:#666;margin:0 0 10px}table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{padding:8px;border:1px solid #ddd;text-align:left;font-size:13px;overflow:hidden;text-overflow:ellipsis}th{background:#fff0f2;text-align:center;white-space:nowrap}td.center{text-align:center;white-space:nowrap}.ok{color:#2e7d32}.fail{color:#c62828}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}.back{color:#7a0026}.delete{border:0;border-radius:7px;padding:8px 11px;background:#c62828;color:#fff;font-weight:700;cursor:pointer}</style></head>
 <body><div class="box"><div class="head">LOG ĐĂNG NHẬP HỆ THỐNG</div>
-<p class="note">Chỉ lưu log trong 30 ngày gần nhất.</p><table><tr><th>Email</th><th>Thời gian</th><th>Địa chỉ IP</th><th>Kết quả</th></tr>
-{% for item in logs|reverse %}<tr><td>{{ item.email }}</td><td>{{ format_date(item.time) }}</td><td>{{ item.ip }}</td><td class="{{ 'ok' if item.success else 'fail' }}">{{ 'Thành công' if item.success else 'Thất bại' }}</td></tr>{% else %}<tr><td colspan="4">Chưa có log đăng nhập.</td></tr>{% endfor %}</table><div class="actions"><a class="back" href="/admin?pwd={{ pwd }}">← Quay lại quản trị</a><form method="post" action="/admin/login_logs/delete"><input type="hidden" name="pwd" value="{{ pwd }}"><button class="delete" type="submit" onclick="return confirm('Xóa toàn bộ log đăng nhập trong 30 ngày?')">Xóa log</button></form></div></div></body></html>
+<p class="note">Chỉ lưu log trong 30 ngày gần nhất.</p><table><tr><th>Email</th><th style="width:150px;">Thời gian</th><th style="width:120px;">Địa chỉ IP</th><th style="width:100px;">Kết quả</th></tr>
+{% for item in logs|reverse %}<tr><td>{{ item.email }}</td><td class="center">{{ format_date(item.time) }}</td><td class="center">{{ item.ip }}</td><td class="center {{ 'ok' if item.success else 'fail' }}">{{ 'Thành công' if item.success else 'Thất bại' }}</td></tr>{% else %}<tr><td colspan="4" style="text-align:center; color:#888;">Chưa có log đăng nhập.</td></tr>{% endfor %}</table><div class="actions"><a class="back" href="/admin?pwd={{ pwd }}">← Quay lại quản trị</a><form method="post" action="/admin/login_logs/delete"><input type="hidden" name="pwd" value="{{ pwd }}"><button class="delete" type="submit" onclick="return confirm('Xóa toàn bộ log đăng nhập trong 30 ngày?')">Xóa log</button></form></div></div></body></html>
 """
 
 
@@ -2268,14 +2359,17 @@ LOGIN_LOGS_HTML = """
 def admin_login_logs():
   if not is_admin_request():
     return redirect("/admin")
-  return render_template_string(LOGIN_LOGS_HTML, logs=load_login_logs(), format_date=format_date_display, pwd=ADMIN_PASSWORD)
+  with login_log_lock():
+    logs = load_login_logs()
+  return render_template_string(LOGIN_LOGS_HTML, logs=logs, format_date=format_date_display, pwd=ADMIN_PASSWORD)
 
 
 @app.route("/admin/login_logs/delete", methods=["POST"])
 def admin_delete_login_logs():
   if not (is_admin_request() or request.form.get("pwd", "") == ADMIN_PASSWORD):
     return redirect("/admin")
-  save_login_logs([])
+  with login_log_lock():
+    save_login_logs([])
   return redirect(f"/admin/login_logs?pwd={ADMIN_PASSWORD}")
 
 
@@ -2391,8 +2485,7 @@ def save_devices(df):
         except Exception:
             pass
 
-    with open(DEVICES_FILE, "w", encoding="utf-8") as f:
-        json.dump(df.to_dict(orient="records"), f, ensure_ascii=False, indent=2)
+    _atomic_write_json(DEVICES_FILE, df.to_dict(orient="records"))
 
 
 def add_months(source_date, months):
@@ -2525,24 +2618,25 @@ def register():
     if not is_valid_register_email(email):
         return jsonify({"success": False, "msg": "Email không hợp lệ. Chỉ chấp nhận email @agribank.com.vn hoặc @gmail.com."})
 
-    df = load_devices()
-    existing = df[df["email"].astype(str).str.strip().str.lower() == email]
-    if not existing.empty:
-        status = str(existing.iloc[0]["status"]).lower()
-        if status == "approved":
-            return jsonify({"success": False, "msg": "Email này đã được duyệt. Bạn có thể đăng nhập."})
-        if status == "pending":
-            return jsonify({"success": False, "msg": "Yêu cầu đăng ký của email này đang chờ xét duyệt."})
-        if status == "rejected":
-            df.loc[existing.index[0], "status"] = "pending"
-            df.loc[existing.index[0], "locked"] = False
-            save_devices(df)
-            return jsonify({"success": True, "msg": "Yêu cầu đăng ký đã được gửi lại và đang chờ xét duyệt."})
+    with devices_lock():
+        df = load_devices()
+        existing = df[df["email"].astype(str).str.strip().str.lower() == email]
+        if not existing.empty:
+            status = str(existing.iloc[0]["status"]).lower()
+            if status == "approved":
+                return jsonify({"success": False, "msg": "Email này đã được duyệt. Bạn có thể đăng nhập."})
+            if status == "pending":
+                return jsonify({"success": False, "msg": "Yêu cầu đăng ký của email này đang chờ xét duyệt."})
+            if status == "rejected":
+                df.loc[existing.index[0], "status"] = "pending"
+                df.loc[existing.index[0], "locked"] = False
+                save_devices(df)
+                return jsonify({"success": True, "msg": "Yêu cầu đăng ký đã được gửi lại và đang chờ xét duyệt."})
 
-    now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
-    new_row = pd.DataFrame([{"email": email, "device_id": str(uuid.uuid4()), "active_device_id": "", "status": "pending", "activation_code": "", "password": "", "raw_password": "", "locked": False, "created_at": now, "updated_at": now, "note": "Đăng ký mới", "last_login_at": ""}])
-    df = pd.concat([df, new_row], ignore_index=True)
-    save_devices(df)
+        now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+        new_row = pd.DataFrame([{"email": email, "device_id": str(uuid.uuid4()), "active_device_id": "", "status": "pending", "activation_code": "", "password": "", "raw_password": "", "locked": False, "created_at": now, "updated_at": now, "note": "Đăng ký mới", "last_login_at": ""}])
+        df = pd.concat([df, new_row], ignore_index=True)
+        save_devices(df)
     return jsonify({"success": True, "msg": "Đăng ký thành công. Vui lòng chờ admin xét duyệt."})
 
 
@@ -2558,7 +2652,10 @@ def login():
 
     rl_key = f"{request.headers.get('X-Forwarded-For', request.remote_addr or 'unknown').split(',')[0].strip()}:{email}"
     if is_login_rate_limited(rl_key):
-        return jsonify({"success": False, "msg": "Bạn đã nhập sai quá nhiều lần. Vui lòng thử lại sau ít phút."})
+        remaining = get_login_lockout_remaining_seconds(rl_key)
+        minutes, seconds = divmod(remaining, 60)
+        wait_text = f"{minutes} phút {seconds} giây" if minutes > 0 else f"{seconds} giây"
+        return jsonify({"success": False, "msg": f"Bạn đã nhập sai mật khẩu quá 5 lần. Tài khoản tạm khóa, vui lòng thử lại sau {wait_text}."})
 
     try:
         if email in ADMIN_EMAILS:
@@ -2577,48 +2674,52 @@ def login():
     except Exception:
         pass
 
-    df = load_devices()
-    row = df[df["email"].astype(str).str.strip().str.lower() == email]
-    if row.empty:
-        return jsonify({"success": False, "msg": "Email chưa đăng ký. Vui lòng thực hiện đăng ký trước."})
+    with devices_lock():
+        df = load_devices()
+        row = df[df["email"].astype(str).str.strip().str.lower() == email]
+        if row.empty:
+            return jsonify({"success": False, "msg": "Email chưa đăng ký. Vui lòng thực hiện đăng ký trước."})
 
-    status = str(row.iloc[0]["status"]).lower()
-    if status == "pending":
-        return jsonify({"success": False, "msg": "Email của bạn chưa được xét duyệt. Vui lòng chờ admin duyệt."})
-    if status == "rejected":
-        return jsonify({"success": False, "msg": "Email của bạn không được phê duyệt. Vui lòng liên hệ admin."})
-    if bool(row.iloc[0]["locked"]):
-        return jsonify({"success": False, "msg": "Tài khoản của bạn đã bị khóa."})
-    if is_account_expired(row.iloc[0]):
-        return jsonify({"success": False, "msg": f"Tài khoản của bạn đã hết hạn sử dụng (hết hạn: {str(row.iloc[0]['expires_at'])[:10]}). Vui lòng liên hệ admin để gia hạn."})
-    stored_password = str(row.iloc[0]["password"] or "").strip()
-    if not stored_password:
-        return jsonify({"success": False, "msg": "Mật khẩu chưa được cấp. Vui lòng liên hệ admin."})
-    if not verify_password(password, stored_password):
-        record_failed_login(rl_key)
-        return jsonify({"success": False, "msg": "Email hoặc mật khẩu không đúng."})
-    clear_failed_login(rl_key)
-    record_login(email, True)
-    if not (stored_password.startswith("pbkdf2:") or stored_password.startswith("scrypt:")):
-        df.at[row.index[0], "password"] = hash_password(password)
+        status = str(row.iloc[0]["status"]).lower()
+        if status == "pending":
+            return jsonify({"success": False, "msg": "Email của bạn chưa được xét duyệt. Vui lòng chờ admin duyệt."})
+        if status == "rejected":
+            return jsonify({"success": False, "msg": "Email của bạn không được phê duyệt. Vui lòng liên hệ admin."})
+        if bool(row.iloc[0]["locked"]):
+            return jsonify({"success": False, "msg": "Tài khoản của bạn đã bị khóa."})
+        if is_account_expired(row.iloc[0]):
+            return jsonify({"success": False, "msg": f"Tài khoản của bạn đã hết hạn sử dụng (hết hạn: {str(row.iloc[0]['expires_at'])[:10]}). Vui lòng liên hệ admin để gia hạn."})
+        stored_password = str(row.iloc[0]["password"] or "").strip()
+        if not stored_password:
+            return jsonify({"success": False, "msg": "Mật khẩu chưa được cấp. Vui lòng liên hệ admin."})
+        if not verify_password(password, stored_password):
+            record_failed_login(rl_key)
+            record_login(email, False)
+            attempts_left = max(0, LOGIN_MAX_ATTEMPTS - len(LOGIN_ATTEMPTS.get(rl_key, [])))
+            extra = f" (còn {attempts_left} lần thử trước khi bị khóa 2 phút)" if 0 < attempts_left <= 2 else ""
+            return jsonify({"success": False, "msg": f"Email hoặc mật khẩu không đúng.{extra}"})
+        clear_failed_login(rl_key)
+        record_login(email, True)
+        if not (stored_password.startswith("pbkdf2:") or stored_password.startswith("scrypt:")):
+            df.at[row.index[0], "password"] = hash_password(password)
 
-    current_device_id = (request.cookies.get("device_id") or "").strip()
-    if not current_device_id:
-        current_device_id = str(uuid.uuid4())
+        current_device_id = (request.cookies.get("device_id") or "").strip()
+        if not current_device_id:
+            current_device_id = str(uuid.uuid4())
 
-    active_device_id = str(row.iloc[0]["active_device_id"] or "").strip()
-    if active_device_id and active_device_id != current_device_id:
-        return jsonify({
-            "success": False,
-            "msg": "Tài khoản này đang đăng nhập trên thiết bị khác. Nếu bạn đã đăng xuất trên thiết bị cũ, nhấn 'Xóa đăng nhập cũ' để giải phóng phiên.",
-            "otherDevice": True
-        })
+        active_device_id = str(row.iloc[0]["active_device_id"] or "").strip()
+        if active_device_id and active_device_id != current_device_id:
+            return jsonify({
+                "success": False,
+                "msg": "Tài khoản này đang đăng nhập trên thiết bị khác. Nếu bạn đã đăng xuất trên thiết bị cũ, nhấn 'Xóa đăng nhập cũ' để giải phóng phiên.",
+                "otherDevice": True
+            })
 
-    now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
-    df.at[row.index[0], "device_id"] = current_device_id
-    df.at[row.index[0], "active_device_id"] = current_device_id
-    df.at[row.index[0], "updated_at"] = now
-    df.at[row.index[0], "last_login_at"] = now
+        now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+        df.at[row.index[0], "device_id"] = current_device_id
+        df.at[row.index[0], "active_device_id"] = current_device_id
+        df.at[row.index[0], "updated_at"] = now
+        df.at[row.index[0], "last_login_at"] = now
     save_devices(df)
 
     resp = make_response(jsonify({"success": True, "msg": "Đăng nhập thành công"}))
@@ -2682,12 +2783,13 @@ def logout():
     device_id = request.cookies.get("device_id")
     email = request.cookies.get("email")
     if device_id and email:
-        df = load_devices()
-        row = df[df["email"].astype(str).str.strip().str.lower() == (email or "")]
-        if not row.empty and str(row.iloc[0]["active_device_id"] or "").strip() == device_id:
-            df.at[row.index[0], "active_device_id"] = ""
-            df.at[row.index[0], "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
-            save_devices(df)
+        with devices_lock():
+            df = load_devices()
+            row = df[df["email"].astype(str).str.strip().str.lower() == (email or "")]
+            if not row.empty and str(row.iloc[0]["active_device_id"] or "").strip() == device_id:
+                df.at[row.index[0], "active_device_id"] = ""
+                df.at[row.index[0], "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+                save_devices(df)
     if email:
         SESSION_USED_QUESTIONS.pop(email.strip().lower(), None)
         save_used_questions()
@@ -2725,22 +2827,23 @@ def change_password_action():
         return jsonify({"success": False, "msg": "Vui lòng điền đầy đủ thông tin."})
     if len(new_password) < 6:
         return jsonify({"success": False, "msg": "Mật khẩu mới phải ít nhất 6 ký tự."})
-    df = load_devices()
-    row = df[df["email"].astype(str).str.strip().str.lower() == email]
-    if row.empty:
-        return jsonify({"success": False, "msg": "Email không tồn tại."})
-    idx = row.index[0]
-    row = row.iloc[0]
-    if str(row["status"]).lower() != "approved" or bool(row["locked"]) or is_account_expired(row):
-        return jsonify({"success": False, "msg": "Tài khoản không được phép đổi mật khẩu."})
-    if str(row["active_device_id"] or "").strip() != device_id:
-        return jsonify({"success": False, "msg": "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại."})
-    if not verify_password(current_password, row["password"]):
-        return jsonify({"success": False, "msg": "Mật khẩu hiện tại không đúng."})
-    df.at[idx, "password"] = hash_password(new_password)
-    df.at[idx, "raw_password"] = new_password
-    df.at[idx, "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
-    save_devices(df)
+    with devices_lock():
+        df = load_devices()
+        row = df[df["email"].astype(str).str.strip().str.lower() == email]
+        if row.empty:
+            return jsonify({"success": False, "msg": "Email không tồn tại."})
+        idx = row.index[0]
+        row = row.iloc[0]
+        if str(row["status"]).lower() != "approved" or bool(row["locked"]) or is_account_expired(row):
+            return jsonify({"success": False, "msg": "Tài khoản không được phép đổi mật khẩu."})
+        if str(row["active_device_id"] or "").strip() != device_id:
+            return jsonify({"success": False, "msg": "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại."})
+        if not verify_password(current_password, row["password"]):
+            return jsonify({"success": False, "msg": "Mật khẩu hiện tại không đúng."})
+        df.at[idx, "password"] = hash_password(new_password)
+        df.at[idx, "raw_password"] = new_password
+        df.at[idx, "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+        save_devices(df)
     return jsonify({"success": True, "msg": "Đổi mật khẩu thành công."})
 
 @app.route("/clear_session", methods=["POST"])
@@ -2749,17 +2852,18 @@ def clear_session():
     email = (data.get("email") or "").strip().lower()
     if not email:
         return jsonify({"success": False, "msg": "Vui lòng nhập email để xóa phiên."})
-    df = load_devices()
-    row = df[df["email"].astype(str).str.strip().str.lower() == email]
-    if row.empty:
-        return jsonify({"success": False, "msg": "Email không tồn tại."})
-    idx = row.index[0]
-    active_device_id = str(row.iloc[0]["active_device_id"] or "").strip()
-    if not active_device_id:
-        return jsonify({"success": False, "msg": "Không có thiết bị cũ đang đăng nhập."})
-    df.at[idx, "active_device_id"] = ""
-    df.at[idx, "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
-    save_devices(df)
+    with devices_lock():
+        df = load_devices()
+        row = df[df["email"].astype(str).str.strip().str.lower() == email]
+        if row.empty:
+            return jsonify({"success": False, "msg": "Email không tồn tại."})
+        idx = row.index[0]
+        active_device_id = str(row.iloc[0]["active_device_id"] or "").strip()
+        if not active_device_id:
+            return jsonify({"success": False, "msg": "Không có thiết bị cũ đang đăng nhập."})
+        df.at[idx, "active_device_id"] = ""
+        df.at[idx, "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+        save_devices(df)
     resp = make_response(jsonify({"success": True, "msg": "Phiên đăng nhập cũ đã được xóa. Bạn có thể đăng nhập lại."}))
     resp.delete_cookie("device_id")
     resp.delete_cookie("email")
@@ -2840,132 +2944,133 @@ def _handle_upload_users(file):
     except Exception as e:
         return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote(f"Không thể đọc file Excel: {e}"))
     
-    df = load_devices()
-    now = now_vn()
-    now_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    with devices_lock():
+        df = load_devices()
+        now = now_vn()
+        now_str = now.strftime("%Y-%m-%d %H:%M:%S")
     
-    added_count = 0
-    row_errors = []  # từng dòng lỗi: {"row": số dòng trong Excel, "email": email đọc được (nếu có), "reason": lý do cụ thể}
-    seen_emails_in_file = {}  # email -> số dòng xuất hiện lần đầu trong cùng file (phát hiện trùng lặp)
+        added_count = 0
+        row_errors = []  # từng dòng lỗi: {"row": số dòng trong Excel, "email": email đọc được (nếu có), "reason": lý do cụ thể}
+        seen_emails_in_file = {}  # email -> số dòng xuất hiện lần đầu trong cùng file (phát hiện trùng lặp)
     
-    col_map = {}
-    for col in df_upload.columns:
-        c_clean = re.sub(r'[^a-zA-Z]', '', str(col)).lower()
-        if 'tt' in c_clean:
-            col_map['tt'] = col
-        elif 'khau' in c_clean:
-            col_map['password'] = col
-        elif 'email' in c_clean:
-            col_map['email'] = col
-        elif 'pass' in c_clean and 'password' not in col_map:
-            col_map['password'] = col
-        elif 'phong' in c_clean or 'note' in c_clean:
-            col_map['note'] = col
-        elif 'han' in c_clean or 'ngay' in c_clean or 'expiry' in c_clean:
-            col_map['expiry'] = col
-        elif 'trangthai' in c_clean or c_clean == 'status':
-          col_map['status'] = col
-        elif 'khoa' in c_clean or 'locked' in c_clean:
-          col_map['locked'] = col
+        col_map = {}
+        for col in df_upload.columns:
+            c_clean = re.sub(r'[^a-zA-Z]', '', str(col)).lower()
+            if 'tt' in c_clean:
+                col_map['tt'] = col
+            elif 'khau' in c_clean:
+                col_map['password'] = col
+            elif 'email' in c_clean:
+                col_map['email'] = col
+            elif 'pass' in c_clean and 'password' not in col_map:
+                col_map['password'] = col
+            elif 'phong' in c_clean or 'note' in c_clean:
+                col_map['note'] = col
+            elif 'han' in c_clean or 'ngay' in c_clean or 'expiry' in c_clean:
+                col_map['expiry'] = col
+            elif 'trangthai' in c_clean or c_clean == 'status':
+              col_map['status'] = col
+            elif 'khoa' in c_clean or 'locked' in c_clean:
+              col_map['locked'] = col
 
-    email_col = col_map.get('email', df_upload.columns[0] if len(df_upload.columns) > 0 else None)
-    if not email_col:
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("File Excel không có cột Email."))
+        email_col = col_map.get('email', df_upload.columns[0] if len(df_upload.columns) > 0 else None)
+        if not email_col:
+            return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("File Excel không có cột Email."))
 
-    def _cell_str(row, col):
-        """Đọc giá trị 1 ô Excel dưới dạng chuỗi, tránh lỗi hiển thị 'nan' khi ô đang để trống."""
-        if col is None:
-            return ""
-        val = row.get(col)
-        return "" if pd.isna(val) else str(val).strip()
+        def _cell_str(row, col):
+            """Đọc giá trị 1 ô Excel dưới dạng chuỗi, tránh lỗi hiển thị 'nan' khi ô đang để trống."""
+            if col is None:
+                return ""
+            val = row.get(col)
+            return "" if pd.isna(val) else str(val).strip()
 
-    for pos, row in df_upload.iterrows():
-        excel_row_num = pos + 2  # +2: bù dòng tiêu đề (dòng 1) + Excel đánh số từ 1
+        for pos, row in df_upload.iterrows():
+            excel_row_num = pos + 2  # +2: bù dòng tiêu đề (dòng 1) + Excel đánh số từ 1
 
-        email_cell = row.get(email_col)
-        raw_email = "" if pd.isna(email_cell) else str(email_cell).strip()
-        email = raw_email.lower()
+            email_cell = row.get(email_col)
+            raw_email = "" if pd.isna(email_cell) else str(email_cell).strip()
+            email = raw_email.lower()
 
-        if not email:
-            row_errors.append({"row": excel_row_num, "email": "(trống)", "reason": "Ô Email đang để trống"})
-            continue
-        if not is_valid_register_email(email):
-            row_errors.append({
-                "row": excel_row_num, "email": raw_email,
-                "reason": "Email không đúng định dạng cho phép (chỉ chấp nhận đuôi @agribank.com.vn hoặc @gmail.com)"
-            })
-            continue
-        if email in seen_emails_in_file:
-            row_errors.append({
-                "row": excel_row_num, "email": raw_email,
-                "reason": f"Email bị trùng lặp với dòng {seen_emails_in_file[email]} trong cùng file này (chỉ dòng cuối cùng được áp dụng)"
-            })
-            # vẫn tiếp tục xử lý (dòng sau sẽ ghi đè dòng trước), chỉ cảnh báo cho admin biết
-
-        seen_emails_in_file[email] = excel_row_num
-        
-        password = _cell_str(row, col_map.get('password')) if 'password' in col_map else ""
-        if not password:
-            password = DEFAULT_FIRST_PASSWORD
-            
-        note = _cell_str(row, col_map.get('note')) if 'note' in col_map else "Nhập từ Excel"
-        if not note:
-            note = "Nhập từ Excel"
-
-        status = _cell_str(row, col_map.get('status')).lower() if 'status' in col_map else "approved"
-        status = status if status in {"approved", "pending", "rejected"} else "approved"
-        locked_value = _cell_str(row, col_map.get('locked')).lower() if 'locked' in col_map else "không"
-        locked = locked_value in {"có", "co", "yes", "true", "1", "đã khóa"}
-            
-        expiry_raw_str = _cell_str(row, col_map.get('expiry')) if 'expiry' in col_map else ""
-        expires_at = ""
-        if expiry_raw_str:
-            try:
-                days = int(float(expiry_raw_str))
-                if days > 0:
-                    expires_at = (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
-                else:
-                    row_errors.append({
-                        "row": excel_row_num, "email": raw_email,
-                        "reason": f"Cột hạn sử dụng có giá trị không hợp lệ ('{expiry_raw_str}') - đã bỏ qua, tài khoản được đặt KHÔNG GIỚI HẠN"
-                    })
-            except Exception:
+            if not email:
+                row_errors.append({"row": excel_row_num, "email": "(trống)", "reason": "Ô Email đang để trống"})
+                continue
+            if not is_valid_register_email(email):
                 row_errors.append({
                     "row": excel_row_num, "email": raw_email,
-                    "reason": f"Cột hạn sử dụng không phải là số ('{expiry_raw_str}') - đã bỏ qua, tài khoản được đặt KHÔNG GIỚI HẠN"
+                    "reason": "Email không đúng định dạng cho phép (chỉ chấp nhận đuôi @agribank.com.vn hoặc @gmail.com)"
                 })
+                continue
+            if email in seen_emails_in_file:
+                row_errors.append({
+                    "row": excel_row_num, "email": raw_email,
+                    "reason": f"Email bị trùng lặp với dòng {seen_emails_in_file[email]} trong cùng file này (chỉ dòng cuối cùng được áp dụng)"
+                })
+                # vẫn tiếp tục xử lý (dòng sau sẽ ghi đè dòng trước), chỉ cảnh báo cho admin biết
 
-        existing = df[df["email"].astype(str).str.strip().str.lower() == email]
-        if not existing.empty:
-            idx = existing.index[0]
-            df.at[idx, "status"] = status
-            df.at[idx, "password"] = hash_password(password)
-            df.at[idx, "raw_password"] = password
-            df.at[idx, "locked"] = locked
-            df.at[idx, "note"] = note
-            if expires_at:
-                df.at[idx, "expires_at"] = expires_at
-            df.at[idx, "updated_at"] = now_str
-            added_count += 1
-        else:
-            new_user = {
-                "email": email,
-                "device_id": str(uuid.uuid4()),
-                "active_device_id": "",
-                "status": status,
-                "activation_code": generate_code(),
-                "password": hash_password(password),
-                "raw_password": password,
-                "locked": locked,
-                "created_at": now_str,
-                "updated_at": now_str,
-                "note": note,
-                "expires_at": expires_at
-            }
-            df = pd.concat([df, pd.DataFrame([new_user])], ignore_index=True)
-            added_count += 1
+            seen_emails_in_file[email] = excel_row_num
+        
+            password = _cell_str(row, col_map.get('password')) if 'password' in col_map else ""
+            if not password:
+                password = DEFAULT_FIRST_PASSWORD
+            
+            note = _cell_str(row, col_map.get('note')) if 'note' in col_map else "Nhập từ Excel"
+            if not note:
+                note = "Nhập từ Excel"
 
-    save_devices(df)
+            status = _cell_str(row, col_map.get('status')).lower() if 'status' in col_map else "approved"
+            status = status if status in {"approved", "pending", "rejected"} else "approved"
+            locked_value = _cell_str(row, col_map.get('locked')).lower() if 'locked' in col_map else "không"
+            locked = locked_value in {"có", "co", "yes", "true", "1", "đã khóa"}
+            
+            expiry_raw_str = _cell_str(row, col_map.get('expiry')) if 'expiry' in col_map else ""
+            expires_at = ""
+            if expiry_raw_str:
+                try:
+                    days = int(float(expiry_raw_str))
+                    if days > 0:
+                        expires_at = (now + timedelta(days=days)).strftime("%Y-%m-%d %H:%M:%S")
+                    else:
+                        row_errors.append({
+                            "row": excel_row_num, "email": raw_email,
+                            "reason": f"Cột hạn sử dụng có giá trị không hợp lệ ('{expiry_raw_str}') - đã bỏ qua, tài khoản được đặt KHÔNG GIỚI HẠN"
+                        })
+                except Exception:
+                    row_errors.append({
+                        "row": excel_row_num, "email": raw_email,
+                        "reason": f"Cột hạn sử dụng không phải là số ('{expiry_raw_str}') - đã bỏ qua, tài khoản được đặt KHÔNG GIỚI HẠN"
+                    })
+
+            existing = df[df["email"].astype(str).str.strip().str.lower() == email]
+            if not existing.empty:
+                idx = existing.index[0]
+                df.at[idx, "status"] = status
+                df.at[idx, "password"] = hash_password(password)
+                df.at[idx, "raw_password"] = password
+                df.at[idx, "locked"] = locked
+                df.at[idx, "note"] = note
+                if expires_at:
+                    df.at[idx, "expires_at"] = expires_at
+                df.at[idx, "updated_at"] = now_str
+                added_count += 1
+            else:
+                new_user = {
+                    "email": email,
+                    "device_id": str(uuid.uuid4()),
+                    "active_device_id": "",
+                    "status": status,
+                    "activation_code": generate_code(),
+                    "password": hash_password(password),
+                    "raw_password": password,
+                    "locked": locked,
+                    "created_at": now_str,
+                    "updated_at": now_str,
+                    "note": note,
+                    "expires_at": expires_at
+                }
+                df = pd.concat([df, pd.DataFrame([new_user])], ignore_index=True)
+                added_count += 1
+
+        save_devices(df)
 
     if not row_errors:
         msg = f"✅ Đã nhập/cập nhật thành công toàn bộ {added_count} tài khoản, không có dòng nào lỗi."
@@ -2991,42 +3096,43 @@ def admin_decision():
   if not email:
     return redirect("/admin")
 
-  df = load_devices()
-  match = df[df["email"].astype(str).str.strip().str.lower() == email]
-  if not match.empty:
-    idx = match.index[0]
-    now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
-    if action == "approve":
-      df.at[idx, "status"] = "approved"
-      df.at[idx, "activation_code"] = generate_code()
-      had_password_before = bool(str(df.at[idx, "raw_password"] or "").strip())
-      password = generate_password(6) if had_password_before else DEFAULT_FIRST_PASSWORD
-      df.at[idx, "password"] = hash_password(password)
-      df.at[idx, "raw_password"] = password
-      df.at[idx, "locked"] = False
-      df.at[idx, "active_device_id"] = ""
-      df.at[idx, "updated_at"] = now
-      base_note = note or "Đã duyệt"
-      existing_note = str(df.at[idx, "note"] or "")
-      df.at[idx, "note"] = base_note
-      mail_result = send_approval_email(email, password, df.at[idx, "note"])
-      if mail_result["success"]:
+  with devices_lock():
+    df = load_devices()
+    match = df[df["email"].astype(str).str.strip().str.lower() == email]
+    if not match.empty:
+      idx = match.index[0]
+      now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+      if action == "approve":
+        df.at[idx, "status"] = "approved"
+        df.at[idx, "activation_code"] = generate_code()
+        had_password_before = bool(str(df.at[idx, "raw_password"] or "").strip())
+        password = generate_password(6) if had_password_before else DEFAULT_FIRST_PASSWORD
+        df.at[idx, "password"] = hash_password(password)
+        df.at[idx, "raw_password"] = password
+        df.at[idx, "locked"] = False
+        df.at[idx, "active_device_id"] = ""
+        df.at[idx, "updated_at"] = now
+        base_note = note or "Đã duyệt"
+        existing_note = str(df.at[idx, "note"] or "")
         df.at[idx, "note"] = base_note
-      else:
-        if mail_result["msg"] not in existing_note and mail_result["msg"] not in base_note:
-          df.at[idx, "note"] = f"{base_note} | {mail_result['msg']}"
+        mail_result = send_approval_email(email, password, df.at[idx, "note"])
+        if mail_result["success"]:
+          df.at[idx, "note"] = base_note
         else:
-          df.at[idx, "note"] = existing_note or base_note
-    elif action == "reject":
-      df.at[idx, "status"] = "rejected"
-      df.at[idx, "locked"] = False
-      df.at[idx, "active_device_id"] = ""
-      df.at[idx, "updated_at"] = now
-      df.at[idx, "note"] = note or "Từ chối đăng ký"
-    else:
-      df.at[idx, "updated_at"] = now
-      df.at[idx, "note"] = note or df.at[idx, "note"]
-    save_devices(df)
+          if mail_result["msg"] not in existing_note and mail_result["msg"] not in base_note:
+            df.at[idx, "note"] = f"{base_note} | {mail_result['msg']}"
+          else:
+            df.at[idx, "note"] = existing_note or base_note
+      elif action == "reject":
+        df.at[idx, "status"] = "rejected"
+        df.at[idx, "locked"] = False
+        df.at[idx, "active_device_id"] = ""
+        df.at[idx, "updated_at"] = now
+        df.at[idx, "note"] = note or "Từ chối đăng ký"
+      else:
+        df.at[idx, "updated_at"] = now
+        df.at[idx, "note"] = note or df.at[idx, "note"]
+      save_devices(df)
   return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
 
@@ -3041,45 +3147,46 @@ def admin_bulk():
   if not selected:
     return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
-  df = load_devices()
-  now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
-  for email in selected:
-    email = str(email).strip().lower()
-    match = df[df["email"].astype(str).str.strip().str.lower() == email]
-    if match.empty:
-      continue
-    idx = match.index[0]
-    if action == "approve":
-      df.at[idx, "status"] = "approved"
-      df.at[idx, "activation_code"] = generate_code()
-      had_password_before = bool(str(df.at[idx, "raw_password"] or "").strip())
-      password = generate_password(6) if had_password_before else DEFAULT_FIRST_PASSWORD
-      df.at[idx, "password"] = hash_password(password)
-      df.at[idx, "raw_password"] = password
-      df.at[idx, "locked"] = False
-      df.at[idx, "active_device_id"] = ""
-      df.at[idx, "updated_at"] = now
-      base_note = note or "Đã duyệt theo lô"
-      existing_note = str(df.at[idx, "note"] or "")
-      df.at[idx, "note"] = base_note
-      mail_result = send_approval_email(email, password, df.at[idx, "note"])
-      if mail_result["success"]:
+  with devices_lock():
+    df = load_devices()
+    now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+    for email in selected:
+      email = str(email).strip().lower()
+      match = df[df["email"].astype(str).str.strip().str.lower() == email]
+      if match.empty:
+        continue
+      idx = match.index[0]
+      if action == "approve":
+        df.at[idx, "status"] = "approved"
+        df.at[idx, "activation_code"] = generate_code()
+        had_password_before = bool(str(df.at[idx, "raw_password"] or "").strip())
+        password = generate_password(6) if had_password_before else DEFAULT_FIRST_PASSWORD
+        df.at[idx, "password"] = hash_password(password)
+        df.at[idx, "raw_password"] = password
+        df.at[idx, "locked"] = False
+        df.at[idx, "active_device_id"] = ""
+        df.at[idx, "updated_at"] = now
+        base_note = note or "Đã duyệt theo lô"
+        existing_note = str(df.at[idx, "note"] or "")
         df.at[idx, "note"] = base_note
-      else:
-        if mail_result["msg"] not in existing_note and mail_result["msg"] not in base_note:
-          df.at[idx, "note"] = f"{base_note} | {mail_result['msg']}"
+        mail_result = send_approval_email(email, password, df.at[idx, "note"])
+        if mail_result["success"]:
+          df.at[idx, "note"] = base_note
         else:
-          df.at[idx, "note"] = existing_note or base_note
-    elif action == "reject":
-      df.at[idx, "status"] = "rejected"
-      df.at[idx, "locked"] = False
-      df.at[idx, "active_device_id"] = ""
-      df.at[idx, "updated_at"] = now
-      df.at[idx, "note"] = note or "Từ chối theo lô"
-  if action == "delete":
-    emails_lower = [str(e).strip().lower() for e in selected]
-    df = df[~df["email"].astype(str).str.strip().str.lower().isin(emails_lower)]
-  save_devices(df)
+          if mail_result["msg"] not in existing_note and mail_result["msg"] not in base_note:
+            df.at[idx, "note"] = f"{base_note} | {mail_result['msg']}"
+          else:
+            df.at[idx, "note"] = existing_note or base_note
+      elif action == "reject":
+        df.at[idx, "status"] = "rejected"
+        df.at[idx, "locked"] = False
+        df.at[idx, "active_device_id"] = ""
+        df.at[idx, "updated_at"] = now
+        df.at[idx, "note"] = note or "Từ chối theo lô"
+    if action == "delete":
+      emails_lower = [str(e).strip().lower() for e in selected]
+      df = df[~df["email"].astype(str).str.strip().str.lower().isin(emails_lower)]
+    save_devices(df)
   return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
 
@@ -3092,11 +3199,12 @@ def admin_delete():
   if not email:
     return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
-  df = load_devices()
-  match = df[df["email"].astype(str).str.strip().str.lower() == email]
-  if not match.empty:
-    df = df.drop(index=match.index[0])
-    save_devices(df)
+  with devices_lock():
+    df = load_devices()
+    match = df[df["email"].astype(str).str.strip().str.lower() == email]
+    if not match.empty:
+      df = df.drop(index=match.index[0])
+      save_devices(df)
   return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
 
@@ -3112,16 +3220,17 @@ def admin_set_password():
   if len(new_password) < 4:
     return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Mật khẩu mới phải có ít nhất 4 ký tự."))
 
-  df = load_devices()
-  match = df[df["email"].astype(str).str.strip().str.lower() == email]
-  if match.empty:
-    return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Không tìm thấy tài khoản này."))
+  with devices_lock():
+    df = load_devices()
+    match = df[df["email"].astype(str).str.strip().str.lower() == email]
+    if match.empty:
+      return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Không tìm thấy tài khoản này."))
 
-  idx = match.index[0]
-  df.at[idx, "password"] = hash_password(new_password)
-  df.at[idx, "raw_password"] = new_password
-  df.at[idx, "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
-  save_devices(df)
+    idx = match.index[0]
+    df.at[idx, "password"] = hash_password(new_password)
+    df.at[idx, "raw_password"] = new_password
+    df.at[idx, "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+    save_devices(df)
   msg = f"Đã đổi mật khẩu cho tài khoản {email}."
   return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
 
@@ -3136,27 +3245,28 @@ def admin_set_expiry():
   if not email:
     return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
-  df = load_devices()
-  match = df[df["email"].astype(str).str.strip().str.lower() == email]
-  if not match.empty:
-    idx = match.index[0]
-    now = now_vn()
-    if action == "clear":
-      df.at[idx, "expires_at"] = ""
-    elif action == "set":
-      try:
-        value = int(request.form.get("expiry_value", "0"))
-      except Exception:
-        value = 0
-      unit = (request.form.get("expiry_unit") or "day").strip().lower()
-      if value > 0:
-        if unit == "month":
-          new_expiry = add_months(now, value)
-        else:
-          new_expiry = now + timedelta(days=value)
-        df.at[idx, "expires_at"] = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
-    df.at[idx, "updated_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
-    save_devices(df)
+  with devices_lock():
+    df = load_devices()
+    match = df[df["email"].astype(str).str.strip().str.lower() == email]
+    if not match.empty:
+      idx = match.index[0]
+      now = now_vn()
+      if action == "clear":
+        df.at[idx, "expires_at"] = ""
+      elif action == "set":
+        try:
+          value = int(request.form.get("expiry_value", "0"))
+        except Exception:
+          value = 0
+        unit = (request.form.get("expiry_unit") or "day").strip().lower()
+        if value > 0:
+          if unit == "month":
+            new_expiry = add_months(now, value)
+          else:
+            new_expiry = now + timedelta(days=value)
+          df.at[idx, "expires_at"] = new_expiry.strftime("%Y-%m-%d %H:%M:%S")
+      df.at[idx, "updated_at"] = now.strftime("%Y-%m-%d %H:%M:%S")
+      save_devices(df)
   return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
 
@@ -3183,6 +3293,34 @@ def parse_quiz_rows(df):
     return items
 
 
+_QUIZ_CACHE = {}
+_QUIZ_CACHE_LOCK = threading.Lock()
+
+
+def get_quiz_items(path):
+    """Đọc và parse 1 file đề thi Excel, có CACHE theo đường dẫn + thời gian sửa đổi file (mtime).
+    Đây là tối ưu quan trọng khi có hàng trăm/nghìn người cùng thi: nếu không cache, MỖI lần
+    gọi /get_info hoặc /start_quiz đều phải đọc lại toàn bộ file Excel bằng pandas (khá nặng,
+    tốn CPU/IO) - với 1000 người bấm cùng lúc, server dễ bị nghẽn. Có cache thì chỉ đọc lại khi
+    admin thực sự thay đổi nội dung file (mtime đổi), các lần sau phục vụ thẳng từ bộ nhớ."""
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return []
+    with _QUIZ_CACHE_LOCK:
+        cached = _QUIZ_CACHE.get(path)
+        if cached and cached[0] == mtime:
+            return cached[1]
+    try:
+        df = pd.read_excel(path, header=None)
+        items = parse_quiz_rows(df)
+    except Exception:
+        items = []
+    with _QUIZ_CACHE_LOCK:
+        _QUIZ_CACHE[path] = (mtime, items)
+    return items
+
+
 def get_current_email():
     return (request.cookies.get("email") or "").strip().lower()
 
@@ -3198,11 +3336,7 @@ def get_info():
     file = request.args.get("file")
     no_repeat = request.args.get("noRepeat") == "1"
     path = os.path.join(DATA_DIR, file)
-    try:
-        df = pd.read_excel(path, header=None)
-        items = parse_quiz_rows(df)
-    except Exception:
-        items = []
+    items = get_quiz_items(path)
 
     total = len(items)
     remaining = total
@@ -3221,10 +3355,8 @@ def start_quiz():
     num = int(data.get("num", 1))
     no_repeat = bool(data.get("noRepeat"))
     path = os.path.join(DATA_DIR, file)
-    try:
-        df = pd.read_excel(path, header=None)
-        items = parse_quiz_rows(df)
-    except Exception:
+    items = get_quiz_items(path)
+    if not items:
         return jsonify({"questions": [], "total": 0, "remaining": 0})
 
     total = len(items)
