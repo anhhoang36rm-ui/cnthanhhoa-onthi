@@ -444,11 +444,13 @@ body {
 .top-bar img {
   width:56px;
   height:56px;
-  border-radius:14px;
-  background:#fff;
+  border-radius:16px;
+  background:transparent;
+  border:2px solid #fff;
+  box-sizing:border-box;
   display:block;
   margin:0 auto 10px;
-  padding:8px;
+  padding:0;
 }
 .top-bar h1 {
   margin:0;
@@ -1360,7 +1362,7 @@ function finishQuiz(mode){
     if(mode === "timeout") title = "Đã hết thời gian làm bài!";
     if(mode === "early") title = "Bạn đã kết thúc bài thi giữa chừng.";
 
-    let html = `<h3>${title}</h3><p>Kết quả: đúng <strong>${correctCount}/${quizData.length}</strong> câu - <strong>Tỉ lệ đúng: ${percent}%</strong></p>`;
+    let html = `<h3>${title}</h3><p>Kết quả: đúng <strong>${correctCount}/${quizData.length}</strong> câu — <strong>Tỉ lệ đúng: ${percent}%</strong></p>`;
     if(currentUserEmail){
         html += `<p style="color:#7a0026; font-weight:700; font-size:14px;">👤 Tài khoản: ${escapeHtml(currentUserEmail)}</p>`;
     }
@@ -1392,7 +1394,7 @@ function reviewToHtml(){
         const statusCls = !item.answered ? "none" : (item.isCorrect ? "ok" : "bad");
         const statusText = !item.answered ? "Chưa trả lời" : (item.isCorrect ? "Đúng" : "Sai");
         rows += `<div class="review-item">
-            <div class="review-q">Câu ${item.index+1}: ${escapeHtml(item.question)} - <span class="review-status ${statusCls}">${statusText}</span></div>
+            <div class="review-q">Câu ${item.index+1}: ${escapeHtml(item.question)} — <span class="review-status ${statusCls}">${statusText}</span></div>
             ${optionsHtml}
         </div>`;
     });
@@ -1458,7 +1460,7 @@ function exportWord(){
     const accountLine = currentUserEmail ? `<p><strong>Tài khoản:</strong> ${escapeHtml(currentUserEmail)}</p>` : "";
     const summaryText = `${accountLine}<p><strong>Tổng số câu:</strong> ${s.total} &nbsp;|&nbsp; <strong>Đúng:</strong> ${s.correct} &nbsp;|&nbsp; <strong>Sai:</strong> ${s.wrong} &nbsp;|&nbsp; <strong>Chưa trả lời:</strong> ${s.unanswered} &nbsp;|&nbsp; <strong>Tỉ lệ đúng:</strong> ${s.percent}%</p><p><strong>Bắt đầu:</strong> ${formatDateTime(examStartTime)} &nbsp;|&nbsp; <strong>Kết thúc:</strong> ${formatDateTime(examEndTime)} &nbsp;|&nbsp; <strong>Tổng thời gian:</strong> ${formatDuration(durationMs)}</p>`;
     const html = `<html><head><meta charset="UTF-8"></head><body><h2>Kết quả bài thi</h2>${summaryText}${reviewToHtml().replace(/class="[^"]*"/g,"")}</body></html>`;
-    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "-" : "") + "ket_qua_thi.doc";
+    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "_" : "") + "ket_qua_thi.doc";
     downloadBlob(html, "application/msword", fname);
 }
 
