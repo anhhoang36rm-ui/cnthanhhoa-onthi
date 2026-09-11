@@ -1458,7 +1458,7 @@ function exportWord(){
     const accountLine = currentUserEmail ? `<p><strong>Tài khoản:</strong> ${escapeHtml(currentUserEmail)}</p>` : "";
     const summaryText = `${accountLine}<p><strong>Tổng số câu:</strong> ${s.total} &nbsp;|&nbsp; <strong>Đúng:</strong> ${s.correct} &nbsp;|&nbsp; <strong>Sai:</strong> ${s.wrong} &nbsp;|&nbsp; <strong>Chưa trả lời:</strong> ${s.unanswered} &nbsp;|&nbsp; <strong>Tỉ lệ đúng:</strong> ${s.percent}%</p><p><strong>Bắt đầu:</strong> ${formatDateTime(examStartTime)} &nbsp;|&nbsp; <strong>Kết thúc:</strong> ${formatDateTime(examEndTime)} &nbsp;|&nbsp; <strong>Tổng thời gian:</strong> ${formatDuration(durationMs)}</p>`;
     const html = `<html><head><meta charset="UTF-8"></head><body><h2>Kết quả bài thi</h2>${summaryText}${reviewToHtml().replace(/class="[^"]*"/g,"")}</body></html>`;
-    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "_" : "") + "ket_qua_thi.doc";
+    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "-" : "") + "ket_qua_thi.doc";
     downloadBlob(html, "application/msword", fname);
 }
 
