@@ -1360,7 +1360,7 @@ function finishQuiz(mode){
     if(mode === "timeout") title = "Đã hết thời gian làm bài!";
     if(mode === "early") title = "Bạn đã kết thúc bài thi giữa chừng.";
 
-    let html = `<h3>${title}</h3><p>Kết quả: đúng <strong>${correctCount}/${quizData.length}</strong> câu — <strong>Tỉ lệ đúng: ${percent}%</strong></p>`;
+    let html = `<h3>${title}</h3><p>Kết quả: đúng <strong>${correctCount}/${quizData.length}</strong> câu - <strong>Tỉ lệ đúng: ${percent}%</strong></p>`;
     if(currentUserEmail){
         html += `<p style="color:#7a0026; font-weight:700; font-size:14px;">👤 Tài khoản: ${escapeHtml(currentUserEmail)}</p>`;
     }
