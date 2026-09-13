@@ -152,14 +152,247 @@ if DATABASE_URL and DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
 
+_DB_ENGINE = None
+_DB_ENGINE_LOCK = threading.Lock()
+
+
+def _ensure_db_tables(engine):
+    """Tạo các bảng PostgreSQL cần thiết nếu chưa có (an toàn khi gọi nhiều lần / nhiều worker
+    cùng gọi lúc khởi động). Quan trọng nhất: tạo KHÓA DUY NHẤT (unique) trên:
+      - devices.email            -> cho phép UPDATE/INSERT (upsert) đúng 1 user, không cần
+                                     đọc/ghi lại toàn bộ bảng mỗi lần có người đăng nhập.
+      - used_questions(email, fname, qid) -> đảm bảo 1 câu hỏi không bao giờ bị ghi trùng
+                                     cho cùng 1 người + 1 bộ đề, và cho phép chỉ INSERT thêm
+                                     câu mới thay vì phải xóa/ghi lại toàn bảng.
+    Nếu bảng đã tồn tại từ trước (tạo bởi pandas.to_sql, chưa có khóa) thì cố gắng bổ sung
+    khóa bằng ALTER TABLE - nếu vẫn lỗi (vd đã có dữ liệu trùng từ trước) thì bỏ qua an toàn,
+    không làm crash app; các hàm upsert bên dưới vẫn hoạt động nhưng sẽ kém tối ưu hơn."""
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS devices (
+                    email TEXT PRIMARY KEY,
+                    device_id TEXT DEFAULT '',
+                    active_device_id TEXT DEFAULT '',
+                    status TEXT DEFAULT 'pending',
+                    activation_code TEXT DEFAULT '',
+                    password TEXT DEFAULT '',
+                    raw_password TEXT DEFAULT '',
+                    locked BOOLEAN DEFAULT FALSE,
+                    created_at TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT '',
+                    note TEXT DEFAULT '',
+                    expires_at TEXT DEFAULT '',
+                    last_login_at TEXT DEFAULT ''
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS used_questions (
+                    email TEXT NOT NULL,
+                    fname TEXT NOT NULL,
+                    qid INTEGER NOT NULL,
+                    PRIMARY KEY (email, fname, qid)
+                )
+            """))
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS admin_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """))
+    except Exception:
+        pass
+
+    # Trường hợp bảng "devices" đã tồn tại từ trước (tạo bởi to_sql cũ, không có khóa email
+    # duy nhất) - cố gắng bổ sung khóa. Bọc riêng try/except vì lệnh này có thể fail độc lập
+    # (vd nếu email đã có sẵn giá trị trùng lặp trong dữ liệu cũ).
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE devices ADD CONSTRAINT devices_email_unique UNIQUE (email)"))
+    except Exception:
+        pass
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE used_questions ADD CONSTRAINT used_questions_pk UNIQUE (email, fname, qid)"))
+    except Exception:
+        pass
+
+
 def _get_db_engine():
+    """Trả về 1 Engine PostgreSQL DÙNG CHUNG cho toàn bộ app, được tạo đúng 1 LẦN DUY NHẤT
+    khi có request đầu tiên cần đến DB, sau đó tái sử dụng cho mọi request tiếp theo.
+    Trước đây hàm này tạo Engine MỚI ở mỗi lần gọi - mỗi Engine giữ riêng 1 connection pool,
+    nên với nhiều request đồng thời (vd 500 người thi cùng lúc) sẽ tạo ra rất nhiều pool
+    connection dư thừa, gây tốn tài nguyên và làm chậm hệ thống."""
+    global _DB_ENGINE
     if not DATABASE_URL:
         return None
+    if _DB_ENGINE is not None:
+        return _DB_ENGINE
+    with _DB_ENGINE_LOCK:
+        if _DB_ENGINE is None:
+            try:
+                from sqlalchemy import create_engine
+                engine = create_engine(
+                    DATABASE_URL,
+                    pool_pre_ping=True,
+                    pool_size=10,
+                    max_overflow=20,
+                    pool_recycle=1800,
+                )
+                _ensure_db_tables(engine)
+                _DB_ENGINE = engine
+            except Exception:
+                _DB_ENGINE = None
+    return _DB_ENGINE
+
+
+DEVICE_COLUMNS = [
+    "email", "device_id", "active_device_id", "status", "activation_code",
+    "password", "raw_password", "locked", "created_at", "updated_at",
+    "note", "expires_at", "last_login_at",
+]
+
+
+def db_get_device(email):
+    """Lấy ĐÚNG 1 user theo email trực tiếp từ PostgreSQL (SELECT ... WHERE email = ...),
+    KHÔNG đọc cả bảng devices về rồi lọc bằng Pandas như trước. Trả về dict hoặc None nếu
+    không tìm thấy / DB lỗi. Đây là điểm mấu chốt giúp /login, /quiz, /logout... vẫn nhanh
+    dù bảng devices có hàng nghìn user."""
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    engine = _get_db_engine()
+    if engine is None:
+        return None
+    from sqlalchemy import text
     try:
-        from sqlalchemy import create_engine
-        return create_engine(DATABASE_URL, pool_pre_ping=True)
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT * FROM devices WHERE email = :email LIMIT 1"), {"email": email})
+            row = result.mappings().first()
+            if not row:
+                return None
+            device = dict(row)
+            device["locked"] = bool(device.get("locked", False))
+            return device
     except Exception:
         return None
+
+
+def db_upsert_device(device):
+    """Ghi ĐÚNG 1 user vào PostgreSQL: thêm mới nếu chưa có, cập nhật nếu đã có
+    (INSERT ... ON CONFLICT (email) DO UPDATE), thay vì đọc/ghi lại toàn bộ bảng.
+    created_at CỐ TÌNH không nằm trong phần UPDATE để không bị ghi đè ngày đăng ký gốc."""
+    engine = _get_db_engine()
+    if engine is None:
+        return False
+    from sqlalchemy import text
+    email = (device.get("email") or "").strip().lower()
+    if not email:
+        return False
+    data = {col: device.get(col, "") for col in DEVICE_COLUMNS}
+    data["email"] = email
+    data["locked"] = bool(device.get("locked", False))
+    for col in ("device_id", "active_device_id", "status", "activation_code", "password",
+                "raw_password", "created_at", "updated_at", "note", "expires_at", "last_login_at"):
+        if data.get(col) is None:
+            data[col] = ""
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("""
+                INSERT INTO devices (email, device_id, active_device_id, status, activation_code,
+                    password, raw_password, locked, created_at, updated_at, note, expires_at, last_login_at)
+                VALUES (:email, :device_id, :active_device_id, :status, :activation_code,
+                    :password, :raw_password, :locked, :created_at, :updated_at, :note, :expires_at, :last_login_at)
+                ON CONFLICT (email) DO UPDATE SET
+                    device_id = EXCLUDED.device_id,
+                    active_device_id = EXCLUDED.active_device_id,
+                    status = EXCLUDED.status,
+                    activation_code = EXCLUDED.activation_code,
+                    password = EXCLUDED.password,
+                    raw_password = EXCLUDED.raw_password,
+                    locked = EXCLUDED.locked,
+                    updated_at = EXCLUDED.updated_at,
+                    note = EXCLUDED.note,
+                    expires_at = EXCLUDED.expires_at,
+                    last_login_at = EXCLUDED.last_login_at
+            """), data)
+        return True
+    except Exception:
+        return False
+
+
+def db_delete_device(email):
+    """Xóa ĐÚNG 1 user theo email khỏi PostgreSQL."""
+    email = (email or "").strip().lower()
+    engine = _get_db_engine()
+    if engine is None or not email:
+        return False
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM devices WHERE email = :email"), {"email": email})
+        return True
+    except Exception:
+        return False
+
+
+def db_get_used_qids(email, fname):
+    """Lấy danh sách qid (số thứ tự câu hỏi) mà 1 user ĐÃ THI trong 1 file đề, trực tiếp từ
+    PostgreSQL. Trả về None nếu DB không sẵn sàng (để phân biệt với set() rỗng = 'chưa thi câu
+    nào'), hoặc set() các qid đã dùng."""
+    engine = _get_db_engine()
+    if engine is None:
+        return None
+    from sqlalchemy import text
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(
+                text("SELECT qid FROM used_questions WHERE email = :email AND fname = :fname"),
+                {"email": email, "fname": fname},
+            )
+            return {int(r[0]) for r in result}
+    except Exception:
+        return None
+
+
+def db_insert_used_qids(email, fname, qids):
+    """Chỉ INSERT các câu hỏi MỚI vừa được chọn cho bài thi này - KHÔNG đụng đến các câu đã
+    lưu từ trước, KHÔNG xóa/ghi lại toàn bảng. Nhờ khóa duy nhất (email, fname, qid), việc
+    chèn trùng 1 câu (nếu có) sẽ tự động bị bỏ qua (ON CONFLICT DO NOTHING) một cách an toàn."""
+    qids = [int(q) for q in (qids or [])]
+    if not qids:
+        return
+    engine = _get_db_engine()
+    if engine is None:
+        return
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("INSERT INTO used_questions (email, fname, qid) VALUES (:email, :fname, :qid) ON CONFLICT DO NOTHING"),
+                [{"email": email, "fname": fname, "qid": q} for q in qids],
+            )
+    except Exception:
+        pass
+
+
+def db_clear_used_qids(email, fname):
+    """Xóa toàn bộ câu đã dùng của 1 user + 1 file đề - chỉ dùng khi user đã thi HẾT toàn bộ
+    câu hỏi khả dụng và hệ thống cần bắt đầu một vòng ôn tập mới."""
+    engine = _get_db_engine()
+    if engine is None:
+        return
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM used_questions WHERE email = :email AND fname = :fname"),
+                {"email": email, "fname": fname},
+            )
+    except Exception:
+        pass
 
 
 ADMIN_CONFIG_FILE = os.path.join(DATA_DIR, "admin_config.json")
@@ -1498,14 +1731,13 @@ initQuiz();
 def quiz():
     device_id = request.cookies.get("device_id")
     email = request.cookies.get("email")
-    df = load_devices()
-    row = df[df["email"].astype(str).str.strip().str.lower() == (email or "")]
+    device = get_device_by_email(email)
     if (
-        not row.empty
-        and str(row.iloc[0]["status"]).lower() == "approved"
-        and not bool(row.iloc[0]["locked"])
-        and not is_account_expired(row.iloc[0])
-        and str(row.iloc[0]["active_device_id"] or "").strip() == (device_id or "")
+        device
+        and str(device.get("status", "")).lower() == "approved"
+        and not bool(device.get("locked"))
+        and not is_account_expired(device)
+        and str(device.get("active_device_id") or "").strip() == (device_id or "")
     ):
         return render_template_string(HTML_QUIZ)
     return redirect("/")
@@ -2486,8 +2718,14 @@ def save_devices(df):
 
     engine = _get_db_engine()
     if engine is not None:
+        # QUAN TRỌNG: KHÔNG dùng to_sql(if_exists="replace") nữa - cách đó XÓA TOÀN BỘ bảng
+        # rồi ghi lại từ đầu, nghĩa là nếu 1 user khác được thêm/sửa bởi 1 request khác đúng
+        # lúc giữa lúc df này được đọc và lúc được lưu, thay đổi đó sẽ bị MẤT.
+        # Thay vào đó: upsert (INSERT ... ON CONFLICT) TỪNG DÒNG có trong df - chỉ ghi đè
+        # đúng những user nằm trong df này, không đụng đến các user khác trong bảng.
         try:
-            df.to_sql("devices", engine, if_exists="replace", index=False)
+            for _, row in df.iterrows():
+                db_upsert_device(row.to_dict())
             return
         except Exception:
             pass
@@ -2539,6 +2777,27 @@ def is_expired_str(expires_at):
 
 def is_account_expired(row):
     return is_expired_str(row.get("expires_at", ""))
+
+
+def get_device_by_email(email):
+    """Lấy thông tin 1 user theo email theo cách NHANH NHẤT hiện có:
+    - Nếu có PostgreSQL: query trực tiếp 1 dòng (db_get_device) - KHÔNG tải cả bảng.
+    - Nếu không có DB (chế độ file JSON dự phòng): lọc từ load_devices() như trước.
+    Trả về dict (hoặc None nếu không tìm thấy) để mọi nơi gọi đều xử lý thống nhất
+    (thay vì chỗ thì dùng pandas Series, chỗ thì dùng dict)."""
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    engine = _get_db_engine()
+    if engine is not None:
+        return db_get_device(email)
+    df = load_devices()
+    row = df[df["email"].astype(str).str.strip().str.lower() == email]
+    if row.empty:
+        return None
+    device = row.iloc[0].to_dict()
+    device["locked"] = bool(device.get("locked", False))
+    return device
 
 
 def generate_code(length=8):
@@ -2625,6 +2884,32 @@ def register():
     if not is_valid_register_email(email):
         return jsonify({"success": False, "msg": "Email không hợp lệ. Chỉ chấp nhận email @agribank.com.vn hoặc @gmail.com."})
 
+    engine = _get_db_engine()
+    if engine is not None:
+        # Có PostgreSQL: chỉ truy vấn/ghi ĐÚNG 1 user này, không tải/ghi cả bảng.
+        existing = db_get_device(email)
+        if existing:
+            status = str(existing.get("status", "")).lower()
+            if status == "approved":
+                return jsonify({"success": False, "msg": "Email này đã được duyệt. Bạn có thể đăng nhập."})
+            if status == "pending":
+                return jsonify({"success": False, "msg": "Yêu cầu đăng ký của email này đang chờ xét duyệt."})
+            if status == "rejected":
+                existing["status"] = "pending"
+                existing["locked"] = False
+                db_upsert_device(existing)
+                return jsonify({"success": True, "msg": "Yêu cầu đăng ký đã được gửi lại và đang chờ xét duyệt."})
+
+        now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+        db_upsert_device({
+            "email": email, "device_id": str(uuid.uuid4()), "active_device_id": "",
+            "status": "pending", "activation_code": "", "password": "", "raw_password": "",
+            "locked": False, "created_at": now, "updated_at": now, "note": "Đăng ký mới",
+            "expires_at": "", "last_login_at": "",
+        })
+        return jsonify({"success": True, "msg": "Đăng ký thành công. Vui lòng chờ admin xét duyệt."})
+
+    # Không có PostgreSQL (chế độ file JSON dự phòng) - giữ nguyên cách cũ.
     with devices_lock():
         df = load_devices()
         existing = df[df["email"].astype(str).str.strip().str.lower() == email]
@@ -2681,6 +2966,64 @@ def login():
     except Exception:
         pass
 
+    engine = _get_db_engine()
+    if engine is not None:
+        # Có PostgreSQL: chỉ truy vấn & ghi ĐÚNG 1 user này (không tải cả bảng).
+        # Vẫn giữ devices_lock() ở đây để tránh trường hợp hiếm: 2 thiết bị cùng đăng nhập
+        # đúng lúc cùng thấy "chưa có thiết bị nào đang hoạt động" rồi cùng được chấp nhận.
+        with devices_lock():
+            device = db_get_device(email)
+            if not device:
+                return jsonify({"success": False, "msg": "Email chưa đăng ký. Vui lòng thực hiện đăng ký trước."})
+
+            status = str(device.get("status", "")).lower()
+            if status == "pending":
+                return jsonify({"success": False, "msg": "Email của bạn chưa được xét duyệt. Vui lòng chờ admin duyệt."})
+            if status == "rejected":
+                return jsonify({"success": False, "msg": "Email của bạn không được phê duyệt. Vui lòng liên hệ admin."})
+            if bool(device.get("locked")):
+                return jsonify({"success": False, "msg": "Tài khoản của bạn đã bị khóa."})
+            if is_account_expired(device):
+                return jsonify({"success": False, "msg": f"Tài khoản của bạn đã hết hạn sử dụng (hết hạn: {str(device.get('expires_at'))[:10]}). Vui lòng liên hệ admin để gia hạn."})
+            stored_password = str(device.get("password") or "").strip()
+            if not stored_password:
+                return jsonify({"success": False, "msg": "Mật khẩu chưa được cấp. Vui lòng liên hệ admin."})
+            if not verify_password(password, stored_password):
+                record_failed_login(rl_key)
+                record_login(email, False)
+                attempts_left = max(0, LOGIN_MAX_ATTEMPTS - len(LOGIN_ATTEMPTS.get(rl_key, [])))
+                extra = f" (còn {attempts_left} lần thử trước khi bị khóa 2 phút)" if 0 < attempts_left <= 2 else ""
+                return jsonify({"success": False, "msg": f"Email hoặc mật khẩu không đúng.{extra}"})
+            clear_failed_login(rl_key)
+            record_login(email, True)
+            if not (stored_password.startswith("pbkdf2:") or stored_password.startswith("scrypt:")):
+                device["password"] = hash_password(password)
+
+            current_device_id = (request.cookies.get("device_id") or "").strip()
+            if not current_device_id:
+                current_device_id = str(uuid.uuid4())
+
+            active_device_id = str(device.get("active_device_id") or "").strip()
+            if active_device_id and active_device_id != current_device_id:
+                return jsonify({
+                    "success": False,
+                    "msg": "Tài khoản này đang đăng nhập trên thiết bị khác. Nếu bạn đã đăng xuất trên thiết bị cũ, nhấn 'Xóa đăng nhập cũ' để giải phóng phiên.",
+                    "otherDevice": True
+                })
+
+            now = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+            device["device_id"] = current_device_id
+            device["active_device_id"] = current_device_id
+            device["updated_at"] = now
+            device["last_login_at"] = now
+            db_upsert_device(device)
+
+        resp = make_response(jsonify({"success": True, "msg": "Đăng nhập thành công"}))
+        set_app_cookie(resp, "device_id", current_device_id, 365 * 24 * 3600)
+        set_app_cookie(resp, "email", email, 365 * 24 * 3600)
+        return resp
+
+    # Không có PostgreSQL (chế độ file JSON dự phòng) - giữ nguyên cách cũ.
     with devices_lock():
         df = load_devices()
         row = df[df["email"].astype(str).str.strip().str.lower() == email]
@@ -2788,19 +3131,32 @@ def is_user_online(email):
 @app.route("/logout")
 def logout():
     device_id = request.cookies.get("device_id")
-    email = request.cookies.get("email")
+    email = (request.cookies.get("email") or "").strip().lower()
+    engine = _get_db_engine()
     if device_id and email:
-        with devices_lock():
-            df = load_devices()
-            row = df[df["email"].astype(str).str.strip().str.lower() == (email or "")]
-            if not row.empty and str(row.iloc[0]["active_device_id"] or "").strip() == device_id:
-                df.at[row.index[0], "active_device_id"] = ""
-                df.at[row.index[0], "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
-                save_devices(df)
+        if engine is not None:
+            with devices_lock():
+                device = db_get_device(email)
+                if device and str(device.get("active_device_id") or "").strip() == device_id:
+                    device["active_device_id"] = ""
+                    device["updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+                    db_upsert_device(device)
+        else:
+            with devices_lock():
+                df = load_devices()
+                row = df[df["email"].astype(str).str.strip().str.lower() == (email or "")]
+                if not row.empty and str(row.iloc[0]["active_device_id"] or "").strip() == device_id:
+                    df.at[row.index[0], "active_device_id"] = ""
+                    df.at[row.index[0], "updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+                    save_devices(df)
     if email:
-        SESSION_USED_QUESTIONS.pop(email.strip().lower(), None)
-        save_used_questions()
-        LAST_SEEN.pop(email.strip().lower(), None)
+        SESSION_USED_QUESTIONS.pop(email, None)
+        if engine is None:
+            # Chế độ file JSON: RAM là nơi lưu chính nên phải ghi lại file khi user đăng xuất.
+            # Ở chế độ PostgreSQL, dữ liệu used_questions đã được ghi ngay khi làm bài
+            # (db_insert_used_qids), không cần đồng bộ lại RAM->DB ở đây nữa.
+            save_used_questions()
+        LAST_SEEN.pop(email, None)
     resp = make_response(redirect("/"))
     resp.delete_cookie("device_id")
     resp.delete_cookie("email")
@@ -2812,12 +3168,10 @@ def change_password_page():
     email = request.cookies.get("email")
     if not email or not device_id:
         return redirect("/")
-    df = load_devices()
-    row = df[df["email"].astype(str).str.strip().str.lower() == (email or "")]
-    if row.empty:
+    device = get_device_by_email(email)
+    if not device:
         return redirect("/")
-    row = row.iloc[0]
-    if str(row["status"]).lower() != "approved" or bool(row["locked"]) or is_account_expired(row) or str(row["active_device_id"] or "").strip() != device_id:
+    if str(device.get("status", "")).lower() != "approved" or bool(device.get("locked")) or is_account_expired(device) or str(device.get("active_device_id") or "").strip() != device_id:
         return redirect("/")
     return render_template_string(HTML_CHANGE_PASSWORD)
 
@@ -2834,6 +3188,25 @@ def change_password_action():
         return jsonify({"success": False, "msg": "Vui lòng điền đầy đủ thông tin."})
     if len(new_password) < 6:
         return jsonify({"success": False, "msg": "Mật khẩu mới phải ít nhất 6 ký tự."})
+    email = (email or "").strip().lower()
+    engine = _get_db_engine()
+    if engine is not None:
+        with devices_lock():
+            device = db_get_device(email)
+            if not device:
+                return jsonify({"success": False, "msg": "Email không tồn tại."})
+            if str(device.get("status", "")).lower() != "approved" or bool(device.get("locked")) or is_account_expired(device):
+                return jsonify({"success": False, "msg": "Tài khoản không được phép đổi mật khẩu."})
+            if str(device.get("active_device_id") or "").strip() != device_id:
+                return jsonify({"success": False, "msg": "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại."})
+            if not verify_password(current_password, device.get("password")):
+                return jsonify({"success": False, "msg": "Mật khẩu hiện tại không đúng."})
+            device["password"] = hash_password(new_password)
+            device["raw_password"] = new_password
+            device["updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+            db_upsert_device(device)
+        return jsonify({"success": True, "msg": "Đổi mật khẩu thành công."})
+
     with devices_lock():
         df = load_devices()
         row = df[df["email"].astype(str).str.strip().str.lower() == email]
@@ -2859,6 +3232,23 @@ def clear_session():
     email = (data.get("email") or "").strip().lower()
     if not email:
         return jsonify({"success": False, "msg": "Vui lòng nhập email để xóa phiên."})
+    engine = _get_db_engine()
+    if engine is not None:
+        with devices_lock():
+            device = db_get_device(email)
+            if not device:
+                return jsonify({"success": False, "msg": "Email không tồn tại."})
+            active_device_id = str(device.get("active_device_id") or "").strip()
+            if not active_device_id:
+                return jsonify({"success": False, "msg": "Không có thiết bị cũ đang đăng nhập."})
+            device["active_device_id"] = ""
+            device["updated_at"] = now_vn().strftime("%Y-%m-%d %H:%M:%S")
+            db_upsert_device(device)
+        resp = make_response(jsonify({"success": True, "msg": "Phiên đăng nhập cũ đã được xóa. Bạn có thể đăng nhập lại."}))
+        resp.delete_cookie("device_id")
+        resp.delete_cookie("email")
+        return resp
+
     with devices_lock():
         df = load_devices()
         row = df[df["email"].astype(str).str.strip().str.lower() == email]
@@ -3192,7 +3582,14 @@ def admin_bulk():
         df.at[idx, "note"] = note or "Từ chối theo lô"
     if action == "delete":
       emails_lower = [str(e).strip().lower() for e in selected]
+      engine = _get_db_engine()
+      if engine is not None:
+        # save_devices() giờ chỉ upsert, không xóa - phải xóa tường minh từng email.
+        for e in emails_lower:
+          db_delete_device(e)
       df = df[~df["email"].astype(str).str.strip().str.lower().isin(emails_lower)]
+      save_devices(df)
+      return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
     save_devices(df)
   return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
@@ -3204,6 +3601,14 @@ def admin_delete():
 
   email = (request.form.get("email") or "").strip().lower()
   if not email:
+    return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
+
+  engine = _get_db_engine()
+  if engine is not None:
+    # QUAN TRỌNG: save_devices() giờ chỉ UPSERT (thêm/cập nhật), KHÔNG còn replace toàn bảng,
+    # nên phải xóa tường minh bằng DELETE - nếu chỉ bỏ dòng khỏi DataFrame rồi upsert phần
+    # còn lại thì dòng đó sẽ KHÔNG bị xóa khỏi PostgreSQL.
+    db_delete_device(email)
     return redirect(f"/admin?pwd={ADMIN_PASSWORD}")
 
   with devices_lock():
@@ -3349,7 +3754,15 @@ def get_info():
     remaining = total
     if no_repeat:
         email = get_current_email()
-        used_ids = SESSION_USED_QUESTIONS.get(email, {}).get(file, set())
+        engine = _get_db_engine()
+        if engine is not None:
+            # PostgreSQL là nguồn dữ liệu chính cho used_questions - lấy đúng
+            # (email, file) này, KHÔNG dùng RAM (RAM có thể không đồng bộ giữa các worker).
+            used_ids = db_get_used_qids(email, file)
+            if used_ids is None:
+                used_ids = set()
+        else:
+            used_ids = SESSION_USED_QUESTIONS.get(email, {}).get(file, set())
         remaining = sum(1 for it in items if it["id"] not in used_ids)
 
     return jsonify({"total": total, "remaining": remaining})
@@ -3378,25 +3791,52 @@ def start_quiz():
         if not email:
             return jsonify({"questions": [], "error": "Phiên đăng nhập không hợp lệ. Vui lòng đăng nhập lại."})
 
-        user_used = SESSION_USED_QUESTIONS.setdefault(email, {})
-        used_ids = user_used.setdefault(file, set())
+        engine = _get_db_engine()
+        if engine is not None:
+            # ===== PostgreSQL là dữ liệu chính (điểm 2 & 3) =====
+            # Chỉ SELECT các qid đã dùng của ĐÚNG email+file này (không tải toàn bảng),
+            # rồi chỉ INSERT các câu MỚI vừa chọn - không xóa/ghi lại toàn bộ dữ liệu cũ.
+            used_ids = db_get_used_qids(email, file)
+            if used_ids is None:
+                used_ids = set()
 
-        available = [it for it in items if it["id"] not in used_ids]
-        if not available and total > 0:
-            used_ids.clear()
-            available = list(items)
-            pool_reset = True
+            available = [it for it in items if it["id"] not in used_ids]
+            if not available and total > 0:
+                db_clear_used_qids(email, file)
+                used_ids = set()
+                available = list(items)
+                pool_reset = True
 
-        if len(available) <= num:
-            partial = 0 < len(available) < num
-            selected = available
+            if len(available) <= num:
+                partial = 0 < len(available) < num
+                selected = available
+            else:
+                selected = random.sample(available, num)
+
+            new_qids = [it["id"] for it in selected]
+            db_insert_used_qids(email, file, new_qids)
+            remaining_after = total - len(used_ids | set(new_qids))
         else:
-            selected = random.sample(available, num)
+            # Không có PostgreSQL (chế độ file JSON dự phòng) - giữ nguyên cách cũ dùng RAM.
+            user_used = SESSION_USED_QUESTIONS.setdefault(email, {})
+            used_ids = user_used.setdefault(file, set())
 
-        for it in selected:
-            used_ids.add(it["id"])
-        remaining_after = total - len(used_ids)
-        save_used_questions()
+            available = [it for it in items if it["id"] not in used_ids]
+            if not available and total > 0:
+                used_ids.clear()
+                available = list(items)
+                pool_reset = True
+
+            if len(available) <= num:
+                partial = 0 < len(available) < num
+                selected = available
+            else:
+                selected = random.sample(available, num)
+
+            for it in selected:
+                used_ids.add(it["id"])
+            remaining_after = total - len(used_ids)
+            save_used_questions()
     else:
         selected = items if num >= total else random.sample(items, num)
         remaining_after = None
