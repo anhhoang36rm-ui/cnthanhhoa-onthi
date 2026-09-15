@@ -192,6 +192,7 @@ def _ensure_db_tables(engine):
                     email TEXT NOT NULL,
                     fname TEXT NOT NULL,
                     qid INTEGER NOT NULL,
+                    used_at TEXT DEFAULT '',
                     PRIMARY KEY (email, fname, qid)
                 )
             """))
@@ -215,6 +216,14 @@ def _ensure_db_tables(engine):
     try:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE used_questions ADD CONSTRAINT used_questions_pk UNIQUE (email, fname, qid)"))
+    except Exception:
+        pass
+    # Bổ sung cột used_at cho bảng used_questions nếu bảng đã tồn tại từ trước (chưa có cột này).
+    # used_at ghi lại thời điểm 1 câu hỏi được đánh dấu "đã dùng" - dùng để tự động dọn dẹp
+    # sau USED_QUESTIONS_MAX_AGE_DAYS ngày không hoạt động (xem _maybe_cleanup_used_questions).
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE used_questions ADD COLUMN IF NOT EXISTS used_at TEXT DEFAULT ''"))
     except Exception:
         pass
 
@@ -342,6 +351,7 @@ def db_get_used_qids(email, fname):
     """Lấy danh sách qid (số thứ tự câu hỏi) mà 1 user ĐÃ THI trong 1 file đề, trực tiếp từ
     PostgreSQL. Trả về None nếu DB không sẵn sàng (để phân biệt với set() rỗng = 'chưa thi câu
     nào'), hoặc set() các qid đã dùng."""
+    _maybe_cleanup_used_questions()
     engine = _get_db_engine()
     if engine is None:
         return None
@@ -360,7 +370,10 @@ def db_get_used_qids(email, fname):
 def db_insert_used_qids(email, fname, qids):
     """Chỉ INSERT các câu hỏi MỚI vừa được chọn cho bài thi này - KHÔNG đụng đến các câu đã
     lưu từ trước, KHÔNG xóa/ghi lại toàn bảng. Nhờ khóa duy nhất (email, fname, qid), việc
-    chèn trùng 1 câu (nếu có) sẽ tự động bị bỏ qua (ON CONFLICT DO NOTHING) một cách an toàn."""
+    chèn trùng 1 câu (nếu có) sẽ tự động bị bỏ qua (ON CONFLICT DO NOTHING) một cách an toàn.
+    Ghi kèm used_at = thời điểm hiện tại (giờ VN) để phục vụ dọn dẹp tự động sau
+    USED_QUESTIONS_MAX_AGE_DAYS ngày không hoạt động - used_questions chỉ là dữ liệu TẠM THỜI
+    chống lặp câu trong lúc đang thi, không phải dữ liệu cần lưu lâu dài."""
     qids = [int(q) for q in (qids or [])]
     if not qids:
         return
@@ -368,11 +381,12 @@ def db_insert_used_qids(email, fname, qids):
     if engine is None:
         return
     from sqlalchemy import text
+    used_at = now_vn().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with engine.begin() as conn:
             conn.execute(
-                text("INSERT INTO used_questions (email, fname, qid) VALUES (:email, :fname, :qid) ON CONFLICT DO NOTHING"),
-                [{"email": email, "fname": fname, "qid": q} for q in qids],
+                text("INSERT INTO used_questions (email, fname, qid, used_at) VALUES (:email, :fname, :qid, :used_at) ON CONFLICT DO NOTHING"),
+                [{"email": email, "fname": fname, "qid": q, "used_at": used_at} for q in qids],
             )
     except Exception:
         pass
@@ -393,6 +407,59 @@ def db_clear_used_qids(email, fname):
             )
     except Exception:
         pass
+
+
+def db_clear_used_qids_for_email(email):
+    """Xóa TOÀN BỘ used_questions của 1 email (mọi bộ đề, không chỉ 1 file) - gọi khi người
+    dùng ĐĂNG XUẤT. used_questions chỉ có ý nghĩa chống lặp câu TRONG PHIÊN đăng nhập hiện tại,
+    nên khi đã đăng xuất thì không cần giữ lại nữa. KHÔNG đụng đến bảng devices hay bất kỳ dữ
+    liệu nào khác."""
+    email = (email or "").strip().lower()
+    engine = _get_db_engine()
+    if engine is None or not email:
+        return
+    from sqlalchemy import text
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM used_questions WHERE email = :email"), {"email": email})
+    except Exception:
+        pass
+
+
+USED_QUESTIONS_MAX_AGE_DAYS = 2
+USED_QUESTIONS_CLEANUP_INTERVAL_SECONDS = 3600  # tối đa chạy dọn dẹp 1 lần/giờ, tránh tốn tài nguyên
+_USED_Q_LAST_CLEANUP = 0.0
+_USED_Q_CLEANUP_LOCK = threading.Lock()
+
+
+def _maybe_cleanup_used_questions():
+    """Tự động dọn dẹp các dòng used_questions đã quá USED_QUESTIONS_MAX_AGE_DAYS ngày
+    KHÔNG được dùng đến (used_at cũ) - dành cho trường hợp người dùng KHÔNG đăng xuất (đóng
+    trình duyệt, mất phiên, hết hạn cookie...). Đây là lưới an toàn thứ 2 bên cạnh việc xóa
+    ngay khi logout. Chỉ chạy tối đa 1 lần/giờ (dùng cờ thời gian + khóa) để không tốn tài
+    nguyên khi có nhiều request. CHỈ xóa dữ liệu trong bảng used_questions - không đụng đến
+    devices hay bất kỳ bảng/dữ liệu nào khác."""
+    global _USED_Q_LAST_CLEANUP
+    engine = _get_db_engine()
+    if engine is None:
+        return
+    now_ts = time.time()
+    if now_ts - _USED_Q_LAST_CLEANUP < USED_QUESTIONS_CLEANUP_INTERVAL_SECONDS:
+        return
+    with _USED_Q_CLEANUP_LOCK:
+        if time.time() - _USED_Q_LAST_CLEANUP < USED_QUESTIONS_CLEANUP_INTERVAL_SECONDS:
+            return
+        from sqlalchemy import text
+        cutoff = (now_vn() - timedelta(days=USED_QUESTIONS_MAX_AGE_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            with engine.begin() as conn:
+                conn.execute(
+                    text("DELETE FROM used_questions WHERE used_at != '' AND used_at < :cutoff"),
+                    {"cutoff": cutoff},
+                )
+        except Exception:
+            pass
+        _USED_Q_LAST_CLEANUP = time.time()
 
 
 ADMIN_CONFIG_FILE = os.path.join(DATA_DIR, "admin_config.json")
@@ -731,7 +798,7 @@ input:focus {
   box-shadow:0 0 0 3px rgba(122,0,38,.12);
 }
 .password-wrap {position:relative;}
-.password-wrap input {padding-right:58px;}
+.password-wrap input {padding-right:58px; font-weight:400; color:#8a8a8a; letter-spacing:1px;}
 .password-toggle {position:absolute; right:4px; top:4px; width:auto; padding:8px 7px; background:#fff5f6; color:#7a0026; font-size:12px;}
 .email-suggestions {display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;}
 .email-suggestion {width:auto; padding:6px 9px; border:1px solid #e3d3cc; border-radius:7px; background:#fff5f6; color:#7a0026; font-size:12px; cursor:pointer;}
@@ -1196,7 +1263,7 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
     <button id="viewResultsBtn" class="menu-item info hidden">📋 Xem đáp án đã thi</button>
     <hr class="menu-divider">
     <a class="menu-item" href="/change_password">🔑 Đổi mật khẩu</a>
-    <a class="menu-item" href="/logout">🚪 Đăng xuất</a>
+    <a class="menu-item" id="logoutLink" href="/logout">🚪 Đăng xuất</a>
   </div>
 </div>
 
@@ -1281,6 +1348,7 @@ const headerUserName = document.getElementById("headerUserName");
 const resultsModalOverlay = document.getElementById("resultsModalOverlay");
 const resultsModalBody = document.getElementById("resultsModalBody");
 const closeModalBtnEl = document.getElementById("closeModalBtn");
+const logoutLink = document.getElementById("logoutLink");
 
 let quizData = [];
 let currentIndex = 0;
@@ -1293,6 +1361,7 @@ let reviewData = [];
 let examStartTime = null;
 let examEndTime = null;
 let currentUserEmail = "";
+let examInProgress = false;
 
 async function showHeaderUserBadge(){
     try{
@@ -1336,6 +1405,7 @@ async function refreshFileInfo(){
 
 async function backToSetup(){
     stopTimer();
+    examInProgress = false;
     hamburgerMenu.classList.add("hidden");
     submitEarlyBtn.classList.add("hidden");
     viewResultsBtn.classList.add("hidden");
@@ -1379,6 +1449,20 @@ async function initQuiz(){
         if(!confirm("Bạn có chắc muốn kết thúc bài thi giữa chừng? Hệ thống sẽ nộp bài với các câu đã trả lời.")) return;
         finishQuiz("early");
     };
+
+    logoutLink.addEventListener("click", (e)=>{
+        if(!examInProgress) return; // không đang thi -> đăng xuất bình thường
+        const confirmed = confirm("Bạn đang trong quá trình thi. Đăng xuất lúc này sẽ được ghi nhận giống như kết thúc bài thi giữa chừng (nộp bài sớm) với kết quả hiện tại. Bạn có chắc muốn đăng xuất?");
+        if(!confirmed){
+            e.preventDefault();
+            return;
+        }
+        hamburgerMenu.classList.add("hidden");
+        finishQuiz("early");
+        // Cho người dùng thấy nhanh kết quả trước khi rời trang, sau đó mới thực sự đăng xuất.
+        e.preventDefault();
+        setTimeout(()=>{ window.location.href = "/logout"; }, 900);
+    });
 
     viewResultsBtn.onclick = ()=>{
         hamburgerMenu.classList.add("hidden");
@@ -1437,6 +1521,7 @@ async function initQuiz(){
             }
         }
 
+        examInProgress = true;
         showQuestion(currentIndex);
     };
 }
@@ -1567,18 +1652,19 @@ function statsHtml(){
     const durationMs = (examStartTime && examEndTime) ? (examEndTime - examStartTime) : null;
     const accountRow = currentUserEmail ? `<span class="time-row">👤 Tài khoản: <strong>${escapeHtml(currentUserEmail)}</strong></span>` : "";
     return `<div class="review-summary">
+        ${accountRow}
+        <span class="time-row">🕐 Bắt đầu: <strong>${formatDateTime(examStartTime)}</strong> &nbsp;|&nbsp; Kết thúc: <strong>${formatDateTime(examEndTime)}</strong> &nbsp;|&nbsp; Tổng thời gian: <strong>${formatDuration(durationMs)}</strong></span>
         <strong>Tổng số câu:</strong> ${s.total}
         &nbsp;|&nbsp; <span class="stat-ok">✔ Đúng: ${s.correct}</span>
         &nbsp;|&nbsp; <span class="stat-bad">✘ Sai: ${s.wrong}</span>
         &nbsp;|&nbsp; <span class="stat-none">– Chưa trả lời: ${s.unanswered}</span>
         &nbsp;|&nbsp; <strong>Tỉ lệ đúng: ${s.percent}%</strong>
-        <span class="time-row">🕐 Bắt đầu: <strong>${formatDateTime(examStartTime)}</strong> &nbsp;|&nbsp; Kết thúc: <strong>${formatDateTime(examEndTime)}</strong> &nbsp;|&nbsp; Tổng thời gian: <strong>${formatDuration(durationMs)}</strong></span>
-        ${accountRow}
     </div>`;
 }
 
 function finishQuiz(mode){
     stopTimer();
+    examInProgress = false;
     examEndTime = new Date();
     hamburgerMenu.classList.add("hidden");
     submitEarlyBtn.classList.add("hidden");
@@ -1594,14 +1680,15 @@ function finishQuiz(mode){
     if(mode === "timeout") title = "Đã hết thời gian làm bài!";
     if(mode === "early") title = "Bạn đã kết thúc bài thi giữa chừng.";
 
-    let html = `<h3>${title}</h3><p>Kết quả: đúng <strong>${correctCount}/${quizData.length}</strong> câu — <strong>Tỉ lệ đúng: ${percent}%</strong></p>`;
+    let html = `<h3>${title}</h3>`;
     if(currentUserEmail){
         html += `<p style="color:#7a0026; font-weight:700; font-size:14px;">👤 Tài khoản: ${escapeHtml(currentUserEmail)}</p>`;
     }
+    html += `<p style="color:#6b6b6b; font-size:14px;">🕐 ${formatDateTime(examStartTime)} → ${formatDateTime(examEndTime)} (${formatDuration(examEndTime - examStartTime)})</p>`;
     if(unanswered > 0){
         html += `<p>Số câu chưa trả lời: ${unanswered}</p>`;
     }
-    html += `<p style="color:#6b6b6b; font-size:14px;">🕐 ${formatDateTime(examStartTime)} → ${formatDateTime(examEndTime)} (${formatDuration(examEndTime - examStartTime)})</p>`;
+    html += `<p>Kết quả: đúng <strong>${correctCount}/${quizData.length}</strong> câu - <strong>Tỉ lệ đúng: ${percent}%</strong></p>`;
     html += `<button id="viewResultsInlineBtn" style="background:#1976d2;">📋 Xem đáp án đã thi</button>`;
     html += `<button id="backToSetupBtn">⟲ Làm bộ đề khác</button>`;
     quizContainer.innerHTML = html;
@@ -1626,7 +1713,7 @@ function reviewToHtml(){
         const statusCls = !item.answered ? "none" : (item.isCorrect ? "ok" : "bad");
         const statusText = !item.answered ? "Chưa trả lời" : (item.isCorrect ? "Đúng" : "Sai");
         rows += `<div class="review-item">
-            <div class="review-q">Câu ${item.index+1}: ${escapeHtml(item.question)} — <span class="review-status ${statusCls}">${statusText}</span></div>
+            <div class="review-q">Câu ${item.index+1}: ${escapeHtml(item.question)} - <span class="review-status ${statusCls}">${statusText}</span></div>
             ${optionsHtml}
         </div>`;
     });
@@ -1682,7 +1769,7 @@ function exportExcel(){
     });
     table += "</table>";
     const html = `<html><head><meta charset="UTF-8"></head><body>${table}</body></html>`;
-    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "_" : "") + "ket_qua_thi.xls";
+    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "-" : "") + "ket_qua_thi.xls";
     downloadBlob(html, "application/vnd.ms-excel", fname);
 }
 
@@ -1760,7 +1847,7 @@ input {width:100%; padding:12px 14px; border:1px solid #ddd; border-radius:12px;
 button {width:100%; padding:14px; border:none; border-radius:12px; background:#7a0026; color:white; font-weight:700; cursor:pointer; font-size:16px;}
 button:hover {background:#5c001f;}
 .password-wrap {position:relative;}
-.password-wrap input {padding-right:68px;}
+.password-wrap input {padding-right:68px; font-weight:400; color:#8a8a8a; letter-spacing:1px;}
 .password-toggle {position:absolute; top:4px; right:4px; width:auto; padding:8px 9px; background:#fff0f2; color:#7a0026; font-size:12px;}
 .password-toggle:hover {background:#f6dce1;}
 .message {min-height:22px; margin-top:14px; font-size:14px; word-break:break-word;}
@@ -1849,7 +1936,7 @@ input {width:100%; padding:12px 14px; border:1px solid #ddd; border-radius:12px;
 button {width:100%; padding:14px; border:none; border-radius:12px; background:#7a0026; color:white; font-weight:700; cursor:pointer; font-size:16px;}
 button:hover {background:#5c001f;}
 .password-wrap {position:relative;}
-.password-wrap input {padding-right:68px;}
+.password-wrap input {padding-right:68px; font-weight:400; color:#8a8a8a; letter-spacing:1px;}
 .password-toggle {position:absolute; top:4px; right:4px; width:auto; padding:8px 9px; border-radius:8px; background:#fff0f2; color:#7a0026; font-size:12px;}
 .password-toggle:hover {background:#f6dce1;}
 .message {min-height:22px; margin-top:14px; font-size:14px; word-break:break-word;}
@@ -3153,9 +3240,12 @@ def logout():
         SESSION_USED_QUESTIONS.pop(email, None)
         if engine is None:
             # Chế độ file JSON: RAM là nơi lưu chính nên phải ghi lại file khi user đăng xuất.
-            # Ở chế độ PostgreSQL, dữ liệu used_questions đã được ghi ngay khi làm bài
-            # (db_insert_used_qids), không cần đồng bộ lại RAM->DB ở đây nữa.
             save_used_questions()
+        else:
+            # Chế độ PostgreSQL: used_questions chỉ là dữ liệu TẠM chống lặp câu trong PHIÊN
+            # đăng nhập hiện tại, không phải dữ liệu cần lưu lâu dài - xóa ngay khi đăng xuất.
+            # Không đụng đến bảng devices hay bất kỳ dữ liệu nào khác.
+            db_clear_used_qids_for_email(email)
         LAST_SEEN.pop(email, None)
     resp = make_response(redirect("/"))
     resp.delete_cookie("device_id")
