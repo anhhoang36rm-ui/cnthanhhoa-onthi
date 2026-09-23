@@ -1,5 +1,6 @@
 from flask import Flask, render_template_string, jsonify, request, redirect, make_response, send_from_directory
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 import pandas as pd
 import os
 import uuid
@@ -1713,7 +1714,7 @@ function reviewToHtml(){
         const statusCls = !item.answered ? "none" : (item.isCorrect ? "ok" : "bad");
         const statusText = !item.answered ? "Chưa trả lời" : (item.isCorrect ? "Đúng" : "Sai");
         rows += `<div class="review-item">
-            <div class="review-q">Câu ${item.index+1}: ${escapeHtml(item.question)} - <span class="review-status ${statusCls}">${statusText}</span></div>
+            <div class="review-q">Câu ${item.index+1}: ${escapeHtml(item.question)} — <span class="review-status ${statusCls}">${statusText}</span></div>
             ${optionsHtml}
         </div>`;
     });
@@ -1769,7 +1770,7 @@ function exportExcel(){
     });
     table += "</table>";
     const html = `<html><head><meta charset="UTF-8"></head><body>${table}</body></html>`;
-    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "-" : "") + "ket_qua_thi.xls";
+    const fname = (currentUserEmail ? currentUserEmail.split("@")[0] + "_" : "") + "ket_qua_thi.xls";
     downloadBlob(html, "application/vnd.ms-excel", fname);
 }
 
@@ -2244,6 +2245,36 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
   </form>
 </div>
 
+<div class="excel-box" style="background:#eefaf4; border-color:#bfe6cf; align-items:flex-start;">
+  <div style="flex:1; min-width:220px;">
+    <strong style="display:block; margin-bottom:6px; color:#236b3b;">📚 Bộ đề thi hiện có ({{ quiz_files|length }})</strong>
+    {% if quiz_files|length == 0 %}
+      <span style="color:#888;">Chưa có bộ đề nào. Hãy tải lên bên phải.</span>
+    {% else %}
+      <div style="display:flex; flex-direction:column; gap:4px; max-height:150px; overflow-y:auto;">
+      {% for qf in quiz_files %}
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; background:#fff; padding:5px 8px; border-radius:6px; border:1px solid #dcefe2;">
+          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ qf.name }} <span style="color:#888; font-size:11px;">({{ qf.count }} câu)</span></span>
+          <form method="post" action="/admin/delete_quiz_file" style="margin:0; display:inline;" onsubmit="return confirm('Xóa vĩnh viễn bộ đề \'{{ qf.name }}\'? Không thể hoàn tác.')">
+            <input type="hidden" name="pwd" value="{{ pwd }}">
+            <input type="hidden" name="filename" value="{{ qf.name }}">
+            <button type="submit" style="background:#c62828; padding:3px 7px; font-size:11px;">🗑️ Xóa</button>
+          </form>
+        </div>
+      {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+  <form method="post" action="/admin/upload_quiz_files" enctype="multipart/form-data" style="align-items:flex-start;">
+    <input type="hidden" name="pwd" value="{{ pwd }}">
+    <div>
+      <input type="file" name="quiz_files" accept=".xlsx,.xls,.csv" multiple required><br>
+      <span style="color:#666; font-size:11px;">Cột B = câu hỏi, C-F = đáp án, G = số thứ tự đáp án đúng (1-4). Có thể chọn nhiều file cùng lúc.</span>
+    </div>
+    <button type="submit" style="background:#2e7d32;" onclick="return confirm('Tải lên các bộ đề đã chọn?')">📤 Tải bộ đề lên</button>
+  </form>
+</div>
+
 <form id="bulkForm" method="post" action="/admin/bulk" class="bulk-bar">
 <input type="hidden" name="pwd" value="{{ pwd }}">
 <div id="bulkSelectedEmails"></div>
@@ -2649,10 +2680,22 @@ def admin():
       "total": len(df),
       "online": sum(1 for email in df["email"].astype(str) if is_user_online(email))
     }
+  quiz_files = []
+  try:
+    for fname in sorted(os.listdir(DATA_DIR)):
+      if fname.lower().endswith((".xlsx", ".xls", ".csv")):
+        try:
+          count = len(get_quiz_items(os.path.join(DATA_DIR, fname)))
+        except Exception:
+          count = 0
+        quiz_files.append({"name": fname, "count": count})
+  except Exception:
+    pass
   return render_template_string(
     ADMIN_HTML,
     rows=rows,
     stats=stats,
+    quiz_files=quiz_files,
     is_expired=is_expired_str,
     is_online=is_user_online,
     format_date=format_date_display,
@@ -3357,6 +3400,97 @@ def clear_session():
     return resp
 
 
+ALLOWED_QUIZ_EXTENSIONS = {".xlsx", ".xls", ".csv"}
+
+
+@app.route("/admin/upload_quiz_files", methods=["POST"])
+def admin_upload_quiz_files():
+    if not is_admin_request():
+        return "Không có quyền"
+
+    files = [f for f in request.files.getlist("quiz_files") if f and f.filename]
+    if not files:
+        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Chưa chọn file bộ đề nào."))
+
+    success_list = []
+    error_list = []
+
+    for file in files:
+        original_name = file.filename
+        ext = os.path.splitext(original_name)[1].lower()
+        if ext not in ALLOWED_QUIZ_EXTENSIONS:
+            error_list.append(f"{original_name}: định dạng không hỗ trợ (chỉ nhận .xlsx, .xls, .csv)")
+            continue
+
+        # secure_filename() bỏ ký tự nguy hiểm (vd "../", khoảng trắng lạ) để chống path traversal
+        # khi lưu file vào thư mục dữ liệu trên server.
+        safe_name = secure_filename(original_name)
+        if not safe_name:
+            safe_name = f"bo_de_{uuid.uuid4().hex[:8]}{ext}"
+        if not safe_name.lower().endswith(ext):
+            safe_name += ext
+
+        try:
+            if ext == ".csv":
+                df = pd.read_csv(file, header=None)
+            else:
+                df = pd.read_excel(file, header=None)
+            items = parse_quiz_rows(df)
+        except Exception as e:
+            error_list.append(f"{original_name}: không đọc được file ({e})")
+            continue
+
+        if len(items) == 0:
+            error_list.append(
+                f"{original_name}: không tìm thấy câu hỏi hợp lệ nào (cột B = câu hỏi, "
+                f"C-F = đáp án, G = số thứ tự đáp án đúng)"
+            )
+            continue
+
+        # Con trỏ đọc file đã bị pandas đọc hết ở bước kiểm tra phía trên - phải seek(0) lại
+        # trước khi lưu xuống đĩa, nếu không file lưu ra sẽ bị rỗng.
+        file.stream.seek(0)
+        dest_path = os.path.join(DATA_DIR, safe_name)
+        file.save(dest_path)
+        # Xóa cache cũ (nếu có) để lần thi tiếp theo đọc đúng nội dung file vừa tải lên.
+        with _QUIZ_CACHE_LOCK:
+            _QUIZ_CACHE.pop(dest_path, None)
+        success_list.append(f"{safe_name} ({len(items)} câu)")
+
+    if success_list and not error_list:
+        msg = f"✅ Đã tải lên {len(success_list)} bộ đề: " + "; ".join(success_list)
+        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
+    if success_list and error_list:
+        msg = f"✅ Tải lên thành công: {'; '.join(success_list)} | ⚠️ Lỗi: {'; '.join(error_list)}"
+        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
+    return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Tải lên thất bại: " + "; ".join(error_list)))
+
+
+@app.route("/admin/delete_quiz_file", methods=["POST"])
+def admin_delete_quiz_file():
+    if not is_admin_request():
+        return "Không có quyền"
+
+    filename = (request.form.get("filename") or "").strip()
+    safe_name = secure_filename(filename)
+    # So khớp với tên gốc để chắc chắn không có ký tự lạ nào lọt qua (chống path traversal).
+    if not safe_name or safe_name != filename:
+        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Tên file không hợp lệ."))
+
+    path = os.path.join(DATA_DIR, safe_name)
+    if not os.path.isfile(path):
+        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Không tìm thấy file bộ đề này."))
+
+    try:
+        os.remove(path)
+        with _QUIZ_CACHE_LOCK:
+            _QUIZ_CACHE.pop(path, None)
+        msg = f"Đã xóa bộ đề '{safe_name}'."
+        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
+    except Exception as e:
+        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote(f"Không xóa được file: {e}"))
+
+
 @app.route("/admin/download_user_template")
 def admin_download_user_template():
     if not is_admin_request():
@@ -3814,7 +3948,10 @@ def get_quiz_items(path):
         if cached and cached[0] == mtime:
             return cached[1]
     try:
-        df = pd.read_excel(path, header=None)
+        if path.lower().endswith(".csv"):
+            df = pd.read_csv(path, header=None)
+        else:
+            df = pd.read_excel(path, header=None)
         items = parse_quiz_rows(df)
     except Exception:
         items = []
@@ -3933,8 +4070,10 @@ def start_quiz():
 
     quiz = []
     for it in selected:
+        # Giữ nguyên thứ tự đáp án đúng như trong file đề gốc (không random.shuffle),
+        # để đảm bảo vị trí cột (A/B/C/D) luôn khớp với đề gốc, tránh lệch đáp án đúng
+        # khi có nhiều đáp án đều đúng về nội dung nhưng khác vị trí cột.
         answers = list(it["answers"])
-        random.shuffle(answers)
         quiz.append({"question": it["question"], "options": answers, "correctAnswer": it["correctAnswer"]})
     random.shuffle(quiz)
 
