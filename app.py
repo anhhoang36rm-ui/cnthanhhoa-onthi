@@ -2223,7 +2223,7 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
   <div id="adminHamburgerMenu" class="admin-hamburger-menu hidden">
     <a class="admin-menu-item" href="/admin/login_logs">🕘 Xem log đăng nhập</a>
     <a class="admin-menu-item" href="/admin/change_password">🔑 Đổi mật khẩu</a>
-    <a class="admin-menu-item" href="/admin/users?pwd={{ pwd }}">👤 Tài khoản người dùng</a>
+    <a class="admin-menu-item" href="/admin/users?pwd={{ pwd }}">👤 Thêm tài khoản người dùng</a>
     <a class="admin-menu-item" href="/admin/quizzes?pwd={{ pwd }}">📚 Quản lý đề</a>
     <a class="admin-menu-item danger" href="/admin/logout">🚪 Thoát</a>
   </div>
