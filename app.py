@@ -1199,7 +1199,7 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
 .exam-topic-name {overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left;}
 .exam-timer {white-space:nowrap; flex-shrink:0;}
 
-.question {background:#fafafa; padding:10px 12px; margin-bottom:8px; border-radius:8px; font-size:16.5px; line-height:1.45; word-wrap: break-word; flex-shrink:0;}
+.question {background:#fafafa; padding:10px 12px; margin-bottom:8px; border-radius:8px; font-size:18.5px; line-height:1.45; word-wrap: break-word; flex-shrink:0;}
 .option {display:block; margin:3px 0; padding:5px 6px; font-size:14.5px; line-height:1.35; word-wrap:break-word; border-radius:6px;}
 .option input {width:auto; margin-right:6px;}
 .correct-mark {color:green; font-weight:bold; margin-right:4px;}
@@ -1222,7 +1222,7 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
   .header-user-badge .user-icon {font-size:12.5px;}
   .hamburger-menu {left:8px; right:8px; top:58px;}
   .exam-status-bar {padding:5px 10px; font-size:12.5px; margin-bottom:6px; gap:6px;}
-  .question {padding:8px 10px; margin-bottom:6px; font-size:15.5px;}
+  .question {padding:8px 10px; margin-bottom:6px; font-size:17.0px;}
   .option {margin:2px 0; padding:4px 6px; font-size:14px;}
   #quiz-container button {padding:9px; font-size:15px; margin-top:6px;}
   #quizContainerWrapper {height: calc(100vh - 88px); height: calc(100dvh - 88px);}
