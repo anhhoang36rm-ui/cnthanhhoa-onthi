@@ -1081,7 +1081,8 @@ HTML_QUIZ = r"""
 <title>ÔN THI NGHIỆP VỤ</title>
 <style>
 * {box-sizing:border-box;}
-body {font-family: Arial, sans-serif; background:#f6f6f6; margin:0; padding:0;}
+html {overscroll-behavior-y:contain;}
+body {font-family: Arial, sans-serif; background:#f6f6f6; margin:0; padding:0; overscroll-behavior-y:contain;}
 
 .app-header {
   position:sticky; top:0; z-index:50;
@@ -1198,7 +1199,7 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
 .exam-topic-name {overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:left;}
 .exam-timer {white-space:nowrap; flex-shrink:0;}
 
-.question {background:#fafafa; padding:10px 12px; margin-bottom:8px; border-radius:8px; font-size:15px; line-height:1.4; word-wrap: break-word; flex-shrink:0;}
+.question {background:#fafafa; padding:10px 12px; margin-bottom:8px; border-radius:8px; font-size:16.5px; line-height:1.45; word-wrap: break-word; flex-shrink:0;}
 .option {display:block; margin:3px 0; padding:5px 6px; font-size:14.5px; line-height:1.35; word-wrap:break-word; border-radius:6px;}
 .option input {width:auto; margin-right:6px;}
 .correct-mark {color:green; font-weight:bold; margin-right:4px;}
@@ -1210,7 +1211,7 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
   height: calc(100dvh - 110px);
   overflow:hidden;
 }
-#quiz-container {flex:1 1 auto; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch;}
+#quiz-container {flex:1 1 auto; min-height:0; overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior-y:contain;}
 #quiz-container button {flex-shrink:0;}
 .hidden {display:none !important;}
 @media (max-width:480px){
@@ -1221,7 +1222,7 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
   .header-user-badge .user-icon {font-size:12.5px;}
   .hamburger-menu {left:8px; right:8px; top:58px;}
   .exam-status-bar {padding:5px 10px; font-size:12.5px; margin-bottom:6px; gap:6px;}
-  .question {padding:8px 10px; margin-bottom:6px; font-size:14.5px;}
+  .question {padding:8px 10px; margin-bottom:6px; font-size:15.5px;}
   .option {margin:2px 0; padding:4px 6px; font-size:14px;}
   #quiz-container button {padding:9px; font-size:15px; margin-top:6px;}
   #quizContainerWrapper {height: calc(100vh - 88px); height: calc(100dvh - 88px);}
@@ -1230,7 +1231,7 @@ hr {border:none; border-top:1px solid #eee; margin:16px 0;}
 .modal-overlay {
   position:fixed; inset:0; background:rgba(0,0,0,.5); z-index:200;
   display:flex; justify-content:center; align-items:flex-start;
-  padding:16px; overflow-y:auto;
+  padding:16px; overflow-y:auto; overscroll-behavior-y:contain;
 }
 .modal-box {background:#fff; border-radius:14px; width:100%; max-width:700px; margin-top:16px; padding:18px; box-shadow:0 20px 60px rgba(0,0,0,.25);}
 .modal-header {display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px;}
@@ -1718,6 +1719,9 @@ function reviewToHtml(){
             ${optionsHtml}
         </div>`;
     });
+    // Nút đóng ở cuối danh sách: khi xem đến câu cuối cùng trên điện thoại, người dùng cần
+    // một nút bấm rõ ràng để quay lại thay vì phải vuốt (dễ kích hoạt pull-to-refresh của trình duyệt).
+    rows += `<button type="button" style="margin-top:6px;" onclick="closeResultsModal()">✕ Đóng / Quay lại</button>`;
     return rows;
 }
 
@@ -2027,7 +2031,7 @@ pre {background:#2c2c2c; color:#e0e0e0; padding:12px; border-radius:8px; overflo
   </div>
   <p><strong>Log chi tiết (đã được ghi vào log server để kiểm tra thêm nếu cần):</strong></p>
   <pre>{{ error_detail }}</pre>
-  <a class="back-link" href="/admin?pwd={{ pwd }}">← Quay lại trang quản trị</a>
+  <a class="back-link" href="/admin/users?pwd={{ pwd }}">← Quay lại trang quản trị</a>
 </div>
 </body>
 </html>
@@ -2079,7 +2083,7 @@ th {background:#fafafa; text-align:center;}
     </tr>
     {% endfor %}
   </table>
-  <a class="back-link" href="/admin?pwd={{ pwd }}">← Quay lại trang quản trị</a>
+  <a class="back-link" href="/admin/users?pwd={{ pwd }}">← Quay lại trang quản trị</a>
 </div>
 </body>
 </html>
@@ -2219,6 +2223,8 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
   <div id="adminHamburgerMenu" class="admin-hamburger-menu hidden">
     <a class="admin-menu-item" href="/admin/login_logs">🕘 Xem log đăng nhập</a>
     <a class="admin-menu-item" href="/admin/change_password">🔑 Đổi mật khẩu</a>
+    <a class="admin-menu-item" href="/admin/users?pwd={{ pwd }}">👤 Tài khoản người dùng</a>
+    <a class="admin-menu-item" href="/admin/quizzes?pwd={{ pwd }}">📚 Quản lý đề</a>
     <a class="admin-menu-item danger" href="/admin/logout">🚪 Thoát</a>
   </div>
 </div>
@@ -2232,47 +2238,6 @@ input[type="text"] {padding:5px; min-width:140px; font-size:12.5px;}
 <div class="rejected-card" role="button" tabindex="0" onclick="setStatusFilter('rejected')"><strong>Từ chối</strong><br>{{ stats.rejected }}</div>
 <div class="total-card" role="button" tabindex="0" onclick="clearStatusFilters()"><strong>Tổng</strong><br>{{ stats.total }}</div>
 <div class="online-card" role="button" tabindex="0" onclick="setOnlineFilter(true)"><strong>Đang online</strong><br>{{ stats.online }}</div>
-</div>
-
-<div class="excel-box">
-  <div>
-   <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu thêm User</a>
-  </div>
-  <form method="post" action="/admin/upload_users" enctype="multipart/form-data">
-    <input type="hidden" name="pwd" value="{{ pwd }}">
-    <input type="file" name="excel_file" accept=".xlsx, .xls" required>
-    <button type="submit" style="background:#2e7d32;" onclick="return confirm('Tải lên và duyệt tự động các tài khoản trong file Excel này?')">📤 Upload</button>
-  </form>
-</div>
-
-<div class="excel-box" style="background:#eefaf4; border-color:#bfe6cf; align-items:flex-start;">
-  <div style="flex:1; min-width:220px;">
-    <strong style="display:block; margin-bottom:6px; color:#236b3b;">📚 Bộ đề thi hiện có ({{ quiz_files|length }})</strong>
-    {% if quiz_files|length == 0 %}
-      <span style="color:#888;">Chưa có bộ đề nào. Hãy tải lên bên phải.</span>
-    {% else %}
-      <div style="display:flex; flex-direction:column; gap:4px; max-height:150px; overflow-y:auto;">
-      {% for qf in quiz_files %}
-        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; background:#fff; padding:5px 8px; border-radius:6px; border:1px solid #dcefe2;">
-          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ qf.name }} <span style="color:#888; font-size:11px;">({{ qf.count }} câu)</span></span>
-          <form method="post" action="/admin/delete_quiz_file" style="margin:0; display:inline;" onsubmit="return confirm('Xóa vĩnh viễn bộ đề \'{{ qf.name }}\'? Không thể hoàn tác.')">
-            <input type="hidden" name="pwd" value="{{ pwd }}">
-            <input type="hidden" name="filename" value="{{ qf.name }}">
-            <button type="submit" style="background:#c62828; padding:3px 7px; font-size:11px;">🗑️ Xóa</button>
-          </form>
-        </div>
-      {% endfor %}
-      </div>
-    {% endif %}
-  </div>
-  <form method="post" action="/admin/upload_quiz_files" enctype="multipart/form-data" style="align-items:flex-start;">
-    <input type="hidden" name="pwd" value="{{ pwd }}">
-    <div>
-      <input type="file" name="quiz_files" accept=".xlsx,.xls,.csv" multiple required><br>
-      <span style="color:#666; font-size:11px;">Cột B = câu hỏi, C-F = đáp án, G = số thứ tự đáp án đúng (1-4). Có thể chọn nhiều file cùng lúc.</span>
-    </div>
-    <button type="submit" style="background:#2e7d32;" onclick="return confirm('Tải lên các bộ đề đã chọn?')">📤 Tải bộ đề lên</button>
-  </form>
 </div>
 
 <form id="bulkForm" method="post" action="/admin/bulk" class="bulk-bar">
@@ -2709,9 +2674,207 @@ def is_admin_request():
   return request.cookies.get("admin_auth") == "1" or request.args.get("pwd", "") == ADMIN_PASSWORD
 
 
+ADMIN_SUBPAGE_STYLE = """
+* {box-sizing:border-box;}
+body {font-family: Arial, sans-serif; background:#f6f6f6; margin:0; padding:0; font-size:14px;}
+.container {max-width:1100px; margin:16px auto; background:white; padding:16px; border-radius:12px; box-shadow:0 0 10px #aaa;}
+.admin-topbar {background:#a9002b; margin:-16px -16px 16px; padding:16px; display:flex; align-items:center; justify-content:space-between; gap:10px; position:relative; border-radius:12px 12px 0 0;}
+.admin-topbar h2 {margin:0; text-transform:uppercase; text-align:center; flex:1; color:#ffffff; font-family:"Segoe UI", Arial, sans-serif; letter-spacing:.35px; font-size:18px;}
+.admin-hamburger-btn {
+  width:auto; font-size:18px; line-height:1; flex-shrink:0;
+  background:#fff; color:#7a0026; border:1px solid #e3d3cc;
+  border-radius:9px; padding:6px 10px; margin:0;
+  cursor:pointer; box-shadow:0 2px 6px rgba(0,0,0,.08);
+}
+.admin-hamburger-btn:hover, .admin-hamburger-btn:active {background:#fff5f6;}
+.admin-hamburger-menu {
+  position:absolute; top:40px; right:0; min-width:190px;
+  background:#fff; border-radius:12px; box-shadow:0 10px 28px rgba(0,0,0,.18);
+  padding:6px; z-index:60;
+}
+.admin-menu-item {
+  display:block; width:100%; text-align:left; text-decoration:none;
+  background:none; border:none; border-radius:8px;
+  padding:8px 9px; margin:1px 0; font-size:13px; color:#333; cursor:pointer;
+}
+.admin-menu-item:hover {background:#f5eff0;}
+.admin-menu-item.danger {color:#c62828; font-weight:700;}
+.hidden {display:none !important;}
+.alert-msg {padding:8px 12px; border-radius:8px; font-weight:700; margin:8px 0; font-size:13px;}
+.alert-success {background:#e8f5e9; color:#2e7d32; border:1px solid #a5d6a7;}
+.alert-error {background:#ffebee; color:#c62828; border:1px solid #ef9a9a;}
+.excel-box {margin:12px 0; padding:12px; background:#eef6fc; border:1px solid #b6d4fe; border-radius:10px; display:flex; gap:10px; flex-wrap:wrap; align-items:center; justify-content:space-between; font-size:12.5px;}
+.excel-box form {display:flex; gap:6px; align-items:center; flex-wrap:wrap;}
+.excel-box input[type="file"] {font-size:12.5px; max-width:190px;}
+.excel-btn-download {background:#1976d2; color:white; text-decoration:none; padding:6px 9px; border-radius:6px; font-weight:700; font-size:12.5px; display:inline-block; white-space:nowrap;}
+.excel-btn-download:hover {background:#115293;}
+.excel-box button {padding:6px 9px; border:none; border-radius:6px; cursor:pointer; color:white; font-size:12.5px; white-space:nowrap;}
+.back-link {display:inline-block; margin-top:14px; color:#7a0026; font-weight:700; text-decoration:none;}
+.back-link:hover {text-decoration:underline;}
+@media (max-width:480px){
+  .container {margin:8px; padding:10px; border-radius:10px;}
+}
+"""
+
+ADMIN_HAMBURGER_MENU_HTML = """
+  <button id="adminHamburgerBtn" class="admin-hamburger-btn" aria-label="Menu">☰ Menu</button>
+  <div id="adminHamburgerMenu" class="admin-hamburger-menu hidden">
+    <a class="admin-menu-item" href="/admin/login_logs">🕘 Xem log đăng nhập</a>
+    <a class="admin-menu-item" href="/admin/change_password">🔑 Đổi mật khẩu</a>
+    <a class="admin-menu-item" href="/admin/users?pwd={{ pwd }}">👤 Tài khoản người dùng</a>
+    <a class="admin-menu-item" href="/admin/quizzes?pwd={{ pwd }}">📚 Quản lý đề</a>
+    <a class="admin-menu-item danger" href="/admin/logout">🚪 Thoát</a>
+  </div>
+"""
+
+ADMIN_HAMBURGER_SCRIPT = """
+<script>
+const adminHamburgerBtn = document.getElementById('adminHamburgerBtn');
+const adminHamburgerMenu = document.getElementById('adminHamburgerMenu');
+adminHamburgerBtn.onclick = (e)=>{
+  e.stopPropagation();
+  adminHamburgerMenu.classList.toggle('hidden');
+};
+adminHamburgerMenu.addEventListener('click', (e)=> e.stopPropagation());
+document.addEventListener('click', ()=> adminHamburgerMenu.classList.add('hidden'));
+</script>
+"""
+
+ADMIN_USERS_HTML = """
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tài khoản người dùng</title>
+<style>""" + ADMIN_SUBPAGE_STYLE + """</style>
+</head>
+<body>
+<div class="container">
+<div class="admin-topbar">
+  <h2>Tài khoản người dùng</h2>""" + ADMIN_HAMBURGER_MENU_HTML + """
+</div>
+
+{% if msg %}<div class="alert-msg alert-success">{{ msg }}</div>{% endif %}
+{% if error %}<div class="alert-msg alert-error">{{ error }}</div>{% endif %}
+
+<div class="excel-box">
+  <div>
+   <a href="/admin/download_user_template" class="excel-btn-download">📥 Tải mẫu thêm User</a>
+  </div>
+  <form method="post" action="/admin/upload_users" enctype="multipart/form-data">
+    <input type="hidden" name="pwd" value="{{ pwd }}">
+    <input type="file" name="excel_file" accept=".xlsx, .xls" required>
+    <button type="submit" style="background:#2e7d32;" onclick="return confirm('Tải lên và duyệt tự động các tài khoản trong file Excel này?')">📤 Upload</button>
+  </form>
+</div>
+
+<a class="back-link" href="/admin?pwd={{ pwd }}">← Quay lại quản lý tài khoản</a>
+""" + ADMIN_HAMBURGER_SCRIPT + """
+</div>
+</body>
+</html>
+"""
+
+ADMIN_QUIZZES_HTML = """
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Quản lý đề</title>
+<style>""" + ADMIN_SUBPAGE_STYLE + """</style>
+</head>
+<body>
+<div class="container">
+<div class="admin-topbar">
+  <h2>Quản lý đề</h2>""" + ADMIN_HAMBURGER_MENU_HTML + """
+</div>
+
+{% if msg %}<div class="alert-msg alert-success">{{ msg }}</div>{% endif %}
+{% if error %}<div class="alert-msg alert-error">{{ error }}</div>{% endif %}
+
+<div class="excel-box" style="background:#eefaf4; border-color:#bfe6cf; align-items:flex-start;">
+  <div style="flex:1; min-width:220px;">
+    <strong style="display:block; margin-bottom:6px; color:#236b3b;">📚 Bộ đề thi hiện có ({{ quiz_files|length }})</strong>
+    {% if quiz_files|length == 0 %}
+      <span style="color:#888;">Chưa có bộ đề nào. Hãy tải lên bên phải.</span>
+    {% else %}
+      <div style="display:flex; flex-direction:column; gap:4px; max-height:260px; overflow-y:auto;">
+      {% for qf in quiz_files %}
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; background:#fff; padding:5px 8px; border-radius:6px; border:1px solid #dcefe2;">
+          <span style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">{{ qf.name }} <span style="color:#888; font-size:11px;">({{ qf.count }} câu)</span></span>
+          <form method="post" action="/admin/delete_quiz_file" style="margin:0; display:inline;" onsubmit="return confirm('Xóa vĩnh viễn bộ đề \\'{{ qf.name }}\\'? Không thể hoàn tác.')">
+            <input type="hidden" name="pwd" value="{{ pwd }}">
+            <input type="hidden" name="filename" value="{{ qf.name }}">
+            <button type="submit" style="background:#c62828; padding:3px 7px; font-size:11px;">🗑️ Xóa</button>
+          </form>
+        </div>
+      {% endfor %}
+      </div>
+    {% endif %}
+  </div>
+  <form method="post" action="/admin/upload_quiz_files" enctype="multipart/form-data" style="align-items:flex-start;">
+    <input type="hidden" name="pwd" value="{{ pwd }}">
+    <div>
+      <input type="file" name="quiz_files" accept=".xlsx,.xls,.csv" multiple required><br>
+      <span style="color:#666; font-size:11px;">Cột B = câu hỏi, C-F = đáp án, G = số thứ tự đáp án đúng (1-4). Có thể chọn nhiều file cùng lúc.</span>
+    </div>
+    <button type="submit" style="background:#2e7d32;" onclick="return confirm('Tải lên các bộ đề đã chọn?')">📤 Tải bộ đề lên</button>
+  </form>
+</div>
+
+<a class="back-link" href="/admin?pwd={{ pwd }}">← Quay lại quản lý tài khoản</a>
+""" + ADMIN_HAMBURGER_SCRIPT + """
+</div>
+</body>
+</html>
+"""
+
+
+def _get_quiz_files_list():
+  quiz_files = []
+  try:
+    for fname in sorted(os.listdir(DATA_DIR)):
+      if fname.lower().endswith((".xlsx", ".xls", ".csv")):
+        try:
+          count = len(get_quiz_items(os.path.join(DATA_DIR, fname)))
+        except Exception:
+          count = 0
+        quiz_files.append({"name": fname, "count": count})
+  except Exception:
+    pass
+  return quiz_files
+
+
+@app.route("/admin/users")
+def admin_users_page():
+  if not is_admin_request():
+    return redirect("/admin")
+  return render_template_string(
+    ADMIN_USERS_HTML,
+    msg=request.args.get("msg", ""),
+    error=request.args.get("error", ""),
+    pwd=ADMIN_PASSWORD
+  )
+
+
+@app.route("/admin/quizzes")
+def admin_quizzes_page():
+  if not is_admin_request():
+    return redirect("/admin")
+  return render_template_string(
+    ADMIN_QUIZZES_HTML,
+    quiz_files=_get_quiz_files_list(),
+    msg=request.args.get("msg", ""),
+    error=request.args.get("error", ""),
+    pwd=ADMIN_PASSWORD
+  )
+
+
 LOGIN_LOGS_HTML = """
 <!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Log đăng nhập</title><style>*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#fff 0%,#f5eff0 100%);margin:0;padding:16px;color:#2c2c2c}.box{max-width:900px;margin:auto;background:#fff;padding:16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.1)}.head{background:#a9002b;margin:-16px -16px 16px;padding:16px;text-align:center;color:#fff;font-family:"Segoe UI",Arial,sans-serif;font-weight:800;font-size:18px;letter-spacing:.35px;border-radius:12px 12px 0 0}.note{font-size:13px;color:#666;margin:0 0 10px}.table-scroll{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}table{width:100%;min-width:520px;border-collapse:collapse;table-layout:fixed}th,td{padding:8px;border:1px solid #ddd;text-align:left;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}th{background:#fff0f2;text-align:center}td.center{text-align:center}.col-email{width:180px;}.col-time{width:130px;}.col-ip{width:110px;}.col-result{width:90px;}.ok{color:#2e7d32}.fail{color:#c62828}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}.back{color:#7a0026}.delete{border:0;border-radius:7px;padding:8px 11px;background:#c62828;color:#fff;font-weight:700;cursor:pointer}
+<title>Log đăng nhập</title><style>*{box-sizing:border-box}body{font-family:"Segoe UI",Arial,sans-serif;background:linear-gradient(180deg,#fff 0%,#f5eff0 100%);margin:0;padding:16px;color:#2c2c2c}.box{max-width:900px;margin:auto;background:#fff;padding:16px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.1)}.head{background:#a9002b;margin:-16px -16px 16px;padding:16px;text-align:center;color:#fff;font-family:"Segoe UI",Arial,sans-serif;font-weight:700;font-size:18px;letter-spacing:.35px;text-transform:uppercase;border-radius:12px 12px 0 0}.note{font-size:13px;color:#666;margin:0 0 10px}.table-scroll{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}table{width:100%;min-width:520px;border-collapse:collapse;table-layout:fixed}th,td{padding:8px;border:1px solid #ddd;text-align:left;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}th{background:#fff0f2;text-align:center}td.center{text-align:center}.col-email{width:180px;}.col-time{width:130px;}.col-ip{width:110px;}.col-result{width:90px;}.ok{color:#2e7d32}.fail{color:#c62828}.actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px}.back{color:#7a0026}.delete{border:0;border-radius:7px;padding:8px 11px;background:#c62828;color:#fff;font-weight:700;cursor:pointer}
 @media (max-width:480px){table{min-width:440px}.col-email{width:140px;}.col-time{width:110px;}.col-ip{width:100px;}.col-result{width:80px;}th,td{font-size:12px;padding:6px;}}
 </style></head>
 <body><div class="box"><div class="head">LOG ĐĂNG NHẬP HỆ THỐNG</div>
@@ -3410,7 +3573,7 @@ def admin_upload_quiz_files():
 
     files = [f for f in request.files.getlist("quiz_files") if f and f.filename]
     if not files:
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Chưa chọn file bộ đề nào."))
+        return redirect(f"/admin/quizzes?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Chưa chọn file bộ đề nào."))
 
     success_list = []
     error_list = []
@@ -3459,11 +3622,11 @@ def admin_upload_quiz_files():
 
     if success_list and not error_list:
         msg = f"✅ Đã tải lên {len(success_list)} bộ đề: " + "; ".join(success_list)
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
+        return redirect(f"/admin/quizzes?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
     if success_list and error_list:
         msg = f"✅ Tải lên thành công: {'; '.join(success_list)} | ⚠️ Lỗi: {'; '.join(error_list)}"
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
-    return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Tải lên thất bại: " + "; ".join(error_list)))
+        return redirect(f"/admin/quizzes?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
+    return redirect(f"/admin/quizzes?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Tải lên thất bại: " + "; ".join(error_list)))
 
 
 @app.route("/admin/delete_quiz_file", methods=["POST"])
@@ -3475,20 +3638,20 @@ def admin_delete_quiz_file():
     safe_name = secure_filename(filename)
     # So khớp với tên gốc để chắc chắn không có ký tự lạ nào lọt qua (chống path traversal).
     if not safe_name or safe_name != filename:
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Tên file không hợp lệ."))
+        return redirect(f"/admin/quizzes?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Tên file không hợp lệ."))
 
     path = os.path.join(DATA_DIR, safe_name)
     if not os.path.isfile(path):
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Không tìm thấy file bộ đề này."))
+        return redirect(f"/admin/quizzes?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Không tìm thấy file bộ đề này."))
 
     try:
         os.remove(path)
         with _QUIZ_CACHE_LOCK:
             _QUIZ_CACHE.pop(path, None)
         msg = f"Đã xóa bộ đề '{safe_name}'."
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
+        return redirect(f"/admin/quizzes?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
     except Exception as e:
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote(f"Không xóa được file: {e}"))
+        return redirect(f"/admin/quizzes?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote(f"Không xóa được file: {e}"))
 
 
 @app.route("/admin/download_user_template")
@@ -3536,7 +3699,7 @@ def admin_upload_users():
 
     file = request.files.get("excel_file")
     if not file or not file.filename:
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Chưa chọn file Excel."))
+        return redirect(f"/admin/users?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("Chưa chọn file Excel."))
 
     try:
         return _handle_upload_users(file)
@@ -3563,7 +3726,7 @@ def _handle_upload_users(file):
     try:
         df_upload = pd.read_excel(file)
     except Exception as e:
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote(f"Không thể đọc file Excel: {e}"))
+        return redirect(f"/admin/users?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote(f"Không thể đọc file Excel: {e}"))
     
     with devices_lock():
         df = load_devices()
@@ -3596,7 +3759,7 @@ def _handle_upload_users(file):
 
         email_col = col_map.get('email', df_upload.columns[0] if len(df_upload.columns) > 0 else None)
         if not email_col:
-            return redirect(f"/admin?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("File Excel không có cột Email."))
+            return redirect(f"/admin/users?pwd={ADMIN_PASSWORD}&error=" + urllib.parse.quote("File Excel không có cột Email."))
 
         def _cell_str(row, col):
             """Đọc giá trị 1 ô Excel dưới dạng chuỗi, tránh lỗi hiển thị 'nan' khi ô đang để trống."""
@@ -3695,7 +3858,7 @@ def _handle_upload_users(file):
 
     if not row_errors:
         msg = f"✅ Đã nhập/cập nhật thành công toàn bộ {added_count} tài khoản, không có dòng nào lỗi."
-        return redirect(f"/admin?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
+        return redirect(f"/admin/users?pwd={ADMIN_PASSWORD}&msg=" + urllib.parse.quote(msg))
 
     return render_template_string(
         UPLOAD_RESULT_HTML,
